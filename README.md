@@ -96,8 +96,11 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env and add your credentials:
 # - SUPABASE_URL
-# - SUPABASE_SERVICE_KEY
+# - SUPABASE_KEY
 # - OPENAI_API_KEY
+# - OPENAI_BASE_URL (if using an OpenAI-compatible provider)
+# - LLM_MODEL=minimax/minimax-m2.7
+# - EMBEDDING_MODEL=openai/text-embedding-3-small
 ```
 
 ### 4. Frontend Setup

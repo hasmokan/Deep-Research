@@ -18,6 +18,17 @@ class ResearchResponse(BaseModel):
     documents_count: int
     created_at: str
 
+class ResearchPlanStep(BaseModel):
+    id: str
+    title: str
+    detail: str
+
+class ResearchPlanResponse(BaseModel):
+    query: str
+    source_label: str
+    summary: str
+    steps: list[ResearchPlanStep]
+
 class DocumentResponse(BaseModel):
     id: int
     content: str

@@ -4,6 +4,7 @@ from typing import Any
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from core.config import get_settings
+from agents.nodes.reasoning import extract_response_parts
 
 settings = get_settings()
 
@@ -31,10 +32,11 @@ async def generate_node(state: dict[str, Any]) -> dict[str, Any]:
 
     # Initialize LLM
     llm = ChatOpenAI(
-        model="gpt-4o",
+        model=settings.llm_model,
         temperature=0.5,
         api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url
+        base_url=settings.openai_base_url,
+        extra_body={"reasoning_split": True},
     )
 
     # Create report generation prompt
@@ -67,8 +69,10 @@ Please generate a comprehensive research report.""")
         "analysis": analysis,
         "documents_count": documents_count
     })
+    content, thinking = extract_response_parts(response)
 
     return {
-        "report": response.content,
+        "report": content,
+        "report_thinking": thinking,
         "report_completed": True
     }

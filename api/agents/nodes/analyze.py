@@ -4,6 +4,7 @@ from typing import Any
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from core.config import get_settings
+from agents.nodes.reasoning import extract_response_parts
 
 settings = get_settings()
 
@@ -30,10 +31,11 @@ async def analyze_node(state: dict[str, Any]) -> dict[str, Any]:
 
     # Initialize LLM
     llm = ChatOpenAI(
-        model="gpt-4o-mini",
+        model=settings.llm_model,
         temperature=0.3,
         api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url
+        base_url=settings.openai_base_url,
+        extra_body={"reasoning_split": True},
     )
 
     # Create analysis prompt
@@ -67,8 +69,10 @@ Please analyze these documents and provide key insights.""")
         "query": query,
         "documents": formatted_docs
     })
+    content, thinking = extract_response_parts(response)
 
     return {
-        "analysis": response.content,
+        "analysis": content,
+        "analysis_thinking": thinking,
         "analysis_completed": True
     }

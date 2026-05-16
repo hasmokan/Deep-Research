@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     supabase_key: str
     openai_api_key: str
     openai_base_url: Optional[str] = None
+    llm_model: str = "minimax/minimax-m2.7"
 
     @field_validator('supabase_url', 'supabase_key', 'openai_api_key')
     @classmethod
@@ -16,7 +17,7 @@ class Settings(BaseSettings):
         return v.strip() if v else v
 
     # Vector configuration
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "openai/text-embedding-3-small"
     embedding_dimensions: int = 1536
 
     # API configuration

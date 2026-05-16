@@ -1,13 +1,48 @@
 """Research API routes"""
 
-from fastapi import APIRouter, HTTPException
-from models.schemas import ResearchRequest, ResearchResponse, DocumentResponse
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from models.schemas import DocumentResponse, ResearchPlanResponse, ResearchRequest, ResearchResponse
 from agents.research_agent import research_agent
+from agents.research_stream import stream_research_events
+from agents.nodes.plan import generate_research_plan
 from services.vector_store import get_vector_store
 from datetime import datetime
 import uuid
 
 router = APIRouter(prefix="/api/research", tags=["research"])
+
+
+@router.post("/plan", response_model=ResearchPlanResponse)
+async def create_research_plan(request: ResearchRequest):
+    """
+    Generate a query-specific research plan before the full research run.
+    """
+    try:
+        return await generate_research_plan(request.query)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Research plan generation failed: {str(e)}"
+        )
+
+
+@router.get("/stream")
+async def stream_research(
+    query: str = Query(..., min_length=1, max_length=500),
+):
+    """
+    Execute research and stream progress/results as Server-Sent Events.
+    """
+    return StreamingResponse(
+        stream_research_events(query),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/", response_model=ResearchResponse)
@@ -27,7 +62,9 @@ async def create_research(request: ResearchRequest):
             "query": request.query,
             "documents": [],
             "analysis": None,
+            "analysis_thinking": None,
             "report": None,
+            "report_thinking": None,
             "web_search_completed": False,
             "analysis_completed": False,
             "report_completed": False
@@ -69,7 +106,9 @@ async def execute_research(request: ResearchRequest):
             "query": request.query,
             "documents": [],
             "analysis": None,
+            "analysis_thinking": None,
             "report": None,
+            "report_thinking": None,
             "web_search_completed": False,
             "analysis_completed": False,
             "report_completed": False
@@ -83,7 +122,9 @@ async def execute_research(request: ResearchRequest):
             "query": result["query"],
             "documents": result.get("documents", []),
             "analysis": result.get("analysis"),
+            "analysis_thinking": result.get("analysis_thinking"),
             "report": result.get("report"),
+            "report_thinking": result.get("report_thinking"),
             "status": "completed" if result.get("report_completed") else "failed"
         }
 

@@ -47,78 +47,78 @@
 }
 
 :root {
-  --radius: 0.75rem;
-  /* SaaS Trust Blue Theme - Light Mode */
-  --background: #F8FAFC;
-  --foreground: #0F172A;
+  --radius: 0.5rem;
+  /* Monochrome Research Console - Light Mode */
+  --background: #F7F7F7;
+  --foreground: #0A0A0A;
   --card: #FFFFFF;
-  --card-foreground: #0F172A;
+  --card-foreground: #0A0A0A;
   --popover: #FFFFFF;
-  --popover-foreground: #0F172A;
-  --primary: #2563EB;
+  --popover-foreground: #0A0A0A;
+  --primary: #0A0A0A;
   --primary-foreground: #FFFFFF;
-  --secondary: #F1F5F9;
-  --secondary-foreground: #1E293B;
-  --muted: #F1F5F9;
-  --muted-foreground: #64748B;
-  --accent: #3B82F6;
+  --secondary: #EDEDED;
+  --secondary-foreground: #161616;
+  --muted: #EFEFEF;
+  --muted-foreground: #666666;
+  --accent: #141414;
   --accent-foreground: #FFFFFF;
-  --destructive: #EF4444;
-  --border: #E2E8F0;
-  --input: #E2E8F0;
-  --ring: #2563EB;
+  --destructive: #C93535;
+  --border: #D8D8D8;
+  --input: #D8D8D8;
+  --ring: #0A0A0A;
   /* Chart Colors */
-  --chart-1: #2563EB;
-  --chart-2: #3B82F6;
-  --chart-3: #60A5FA;
-  --chart-4: #F97316;
-  --chart-5: #10B981;
+  --chart-1: #0A0A0A;
+  --chart-2: #3F3F46;
+  --chart-3: #71717A;
+  --chart-4: #A1A1AA;
+  --chart-5: #22C55E;
   /* Sidebar */
   --sidebar: #FFFFFF;
-  --sidebar-foreground: #0F172A;
-  --sidebar-primary: #2563EB;
+  --sidebar-foreground: #0A0A0A;
+  --sidebar-primary: #0A0A0A;
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #F1F5F9;
-  --sidebar-accent-foreground: #1E293B;
-  --sidebar-border: #E2E8F0;
-  --sidebar-ring: #2563EB;
+  --sidebar-accent: #EFEFEF;
+  --sidebar-accent-foreground: #161616;
+  --sidebar-border: #D8D8D8;
+  --sidebar-ring: #0A0A0A;
 }
 
 .dark {
-  /* SaaS Trust Blue Theme - Dark Mode */
-  --background: #0F172A;
-  --foreground: #F8FAFC;
-  --card: #1E293B;
-  --card-foreground: #F8FAFC;
-  --popover: #1E293B;
-  --popover-foreground: #F8FAFC;
-  --primary: #3B82F6;
-  --primary-foreground: #FFFFFF;
-  --secondary: #334155;
-  --secondary-foreground: #F8FAFC;
-  --muted: #334155;
-  --muted-foreground: #94A3B8;
-  --accent: #60A5FA;
-  --accent-foreground: #0F172A;
+  /* Monochrome Research Console - Dark Mode */
+  --background: #050505;
+  --foreground: #FAFAFA;
+  --card: #0E0E0E;
+  --card-foreground: #FAFAFA;
+  --popover: #0E0E0E;
+  --popover-foreground: #FAFAFA;
+  --primary: #FAFAFA;
+  --primary-foreground: #050505;
+  --secondary: #181818;
+  --secondary-foreground: #FAFAFA;
+  --muted: #171717;
+  --muted-foreground: #A3A3A3;
+  --accent: #F5F5F5;
+  --accent-foreground: #050505;
   --destructive: #F87171;
-  --border: #334155;
-  --input: #334155;
-  --ring: #3B82F6;
+  --border: #2A2A2A;
+  --input: #2A2A2A;
+  --ring: #FAFAFA;
   /* Chart Colors - Dark Mode */
-  --chart-1: #3B82F6;
-  --chart-2: #60A5FA;
-  --chart-3: #93C5FD;
-  --chart-4: #FB923C;
-  --chart-5: #34D399;
+  --chart-1: #FAFAFA;
+  --chart-2: #D4D4D8;
+  --chart-3: #A1A1AA;
+  --chart-4: #71717A;
+  --chart-5: #4ADE80;
   /* Sidebar - Dark Mode */
-  --sidebar: #1E293B;
-  --sidebar-foreground: #F8FAFC;
-  --sidebar-primary: #3B82F6;
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #334155;
-  --sidebar-accent-foreground: #F8FAFC;
-  --sidebar-border: #334155;
-  --sidebar-ring: #3B82F6;
+  --sidebar: #0E0E0E;
+  --sidebar-foreground: #FAFAFA;
+  --sidebar-primary: #FAFAFA;
+  --sidebar-primary-foreground: #050505;
+  --sidebar-accent: #171717;
+  --sidebar-accent-foreground: #FAFAFA;
+  --sidebar-border: #2A2A2A;
+  --sidebar-ring: #FAFAFA;
 }
 
 @layer base {
@@ -127,45 +127,73 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
   }
 }
 
-/* Glassmorphism Utilities */
+/* Premium monochrome surface utilities */
 @layer utilities {
   .glass {
-    @apply bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl;
-    @apply border border-white/20 dark:border-slate-700/50;
+    @apply border backdrop-blur-xl;
+    background: color-mix(in srgb, var(--card) 80%, transparent);
+    border-color: color-mix(in srgb, var(--border) 76%, transparent);
   }
 
   .glass-card {
-    @apply bg-white/90 dark:bg-slate-800/90 backdrop-blur-lg;
-    @apply border border-slate-200/50 dark:border-slate-700/50;
-    @apply shadow-lg shadow-slate-900/5 dark:shadow-slate-900/20;
+    @apply border backdrop-blur-2xl;
+    background: color-mix(in srgb, var(--card) 88%, transparent);
+    border-color: color-mix(in srgb, var(--border) 82%, transparent);
+    box-shadow: 0 18px 60px color-mix(in srgb, var(--foreground) 8%, transparent);
   }
 
   .glass-strong {
-    @apply bg-white/95 dark:bg-slate-800/95 backdrop-blur-2xl;
-    @apply border border-slate-200 dark:border-slate-700;
-    @apply shadow-xl shadow-slate-900/10 dark:shadow-slate-900/30;
+    @apply border backdrop-blur-2xl;
+    background: color-mix(in srgb, var(--card) 94%, transparent);
+    border-color: color-mix(in srgb, var(--border) 92%, transparent);
+    box-shadow: 0 24px 80px color-mix(in srgb, var(--foreground) 10%, transparent);
   }
 
-  /* Gradient backgrounds */
-  .gradient-mesh {
-    background:
-      radial-gradient(at 40% 20%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
-      radial-gradient(at 80% 0%, rgba(99, 102, 241, 0.1) 0px, transparent 50%),
-      radial-gradient(at 0% 50%, rgba(16, 185, 129, 0.08) 0px, transparent 50%),
-      radial-gradient(at 80% 50%, rgba(249, 115, 22, 0.08) 0px, transparent 50%),
-      radial-gradient(at 0% 100%, rgba(59, 130, 246, 0.12) 0px, transparent 50%);
+  .monochrome-grid {
+    background-color: var(--background);
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--foreground) 3%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--foreground) 3%, transparent) 1px, transparent 1px);
+    background-size: 64px 64px;
+    background-position: -1px -1px;
   }
 
-  .dark .gradient-mesh {
-    background:
-      radial-gradient(at 40% 20%, rgba(59, 130, 246, 0.2) 0px, transparent 50%),
-      radial-gradient(at 80% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
-      radial-gradient(at 0% 50%, rgba(16, 185, 129, 0.1) 0px, transparent 50%),
-      radial-gradient(at 80% 50%, rgba(249, 115, 22, 0.1) 0px, transparent 50%),
-      radial-gradient(at 0% 100%, rgba(59, 130, 246, 0.15) 0px, transparent 50%);
+  .surface-noise {
+    background-image:
+      linear-gradient(180deg, color-mix(in srgb, var(--card) 96%, transparent), color-mix(in srgb, var(--muted) 86%, transparent));
+  }
+
+  .shadow-premium {
+    box-shadow:
+      0 1px 0 color-mix(in srgb, var(--foreground) 5%, transparent),
+      0 22px 70px color-mix(in srgb, var(--foreground) 9%, transparent);
+  }
+
+  .hairline {
+    @apply border;
+    border-color: color-mix(in srgb, var(--border) 86%, transparent);
+  }
+
+  .button-sheen {
+    @apply relative overflow-hidden;
+  }
+
+  .button-sheen::after {
+    content: "";
+    position: absolute;
+    inset: -20% auto -20% -40%;
+    width: 34%;
+    transform: skewX(-18deg);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.28), transparent);
+    transition: transform 0.7s ease;
+  }
+
+  .button-sheen:hover::after {
+    transform: translateX(440%) skewX(-18deg);
   }
 
   /* Smooth transitions with reduced motion support */
@@ -199,6 +227,34 @@
     animation: pulse-ring 2s ease-in-out infinite;
   }
 
+  @keyframes thinking-scan {
+    0% {
+      transform: translateX(-55%);
+      opacity: 0;
+    }
+    20% {
+      opacity: 0.65;
+    }
+    100% {
+      transform: translateX(155%);
+      opacity: 0;
+    }
+  }
+
+  .thinking-scan {
+    @apply relative overflow-hidden;
+  }
+
+  .thinking-scan::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 42%;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--foreground) 8%, transparent), transparent);
+    animation: thinking-scan 2.6s ease-in-out infinite;
+  }
+
   /* Skeleton loading */
   @keyframes shimmer {
     0% {
@@ -210,7 +266,12 @@
   }
 
   .skeleton {
-    @apply bg-gradient-to-r from-slate-200 via-slate-100 to-slate-200 dark:from-slate-700 dark:via-slate-600 dark:to-slate-700;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--muted) 90%, transparent),
+      color-mix(in srgb, var(--card) 90%, transparent),
+      color-mix(in srgb, var(--muted) 90%, transparent)
+    );
     background-size: 200% 100%;
     animation: shimmer 1.5s ease-in-out infinite;
   }

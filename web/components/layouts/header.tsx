@@ -1,21 +1,21 @@
 'use client';
 
 /**
- * Floating glassmorphism header with navigation and theme toggle
+ * Floating monochrome header with compact research navigation
  */
 
-import { Search, Sparkles, Github } from 'lucide-react';
+import { Github, Search, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button } from '@/components/ui/button';
 
 export function Header() {
   return (
     <header className="fixed top-4 left-4 right-4 z-50">
-      <nav className="glass-strong mx-auto max-w-5xl rounded-2xl px-4 py-3">
+      <nav className="glass-strong shadow-premium mx-auto max-w-6xl rounded-[8px] px-3 py-2.5">
         <div className="flex items-center justify-between">
           {/* Logo */}
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary">
+            <div className="flex h-9 w-9 items-center justify-center rounded-[7px] bg-primary shadow-sm">
               <Sparkles className="h-5 w-5 text-primary-foreground" />
             </div>
             <div className="flex flex-col">
@@ -29,8 +29,8 @@ export function Header() {
           </div>
 
           {/* Navigation */}
-          <div className="hidden md:flex items-center gap-1">
-            <Button variant="ghost" size="sm" className="gap-2 cursor-pointer">
+          <div className="hidden items-center gap-1 md:flex">
+            <Button variant="ghost" size="sm" className="h-8 gap-2 rounded-[7px] cursor-pointer">
               <Search className="h-4 w-4" />
               Search
             </Button>
@@ -41,7 +41,7 @@ export function Header() {
             <Button
               variant="ghost"
               size="icon"
-              className="h-9 w-9 cursor-pointer"
+              className="h-9 w-9 rounded-[7px] cursor-pointer"
               asChild
             >
               <a

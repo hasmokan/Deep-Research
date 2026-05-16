@@ -83,7 +83,7 @@ ON documents USING hnsw (embedding vector_cosine_ops);
 
 ## Embedding Dimensions
 
-Current setup uses **1536 dimensions** (OpenAI `text-embedding-3-small`).
+Current setup uses **1536 dimensions** (`openai/text-embedding-3-small`).
 
 If switching to a different model:
 1. Update `embedding_dimensions` in `api/core/config.py`

@@ -21,10 +21,7 @@ async def search_node(state: dict[str, Any]) -> dict[str, Any]:
     documents = await vector_store.similarity_search(
         query=query,
         threshold=0.6,  # Minimum similarity threshold
-        limit=10  # Maximum number of documents to retrieve
+        limit=10,  # Maximum number of documents to retrieve
     )
 
-    return {
-        "documents": documents,
-        "search_completed": True
-    }
+    return {"documents": documents, "search_completed": True}

@@ -12,7 +12,9 @@ class ResearchState(TypedDict):
     query: str
     documents: List[Dict[str, Any]]
     analysis: Optional[str]
+    analysis_thinking: Optional[str]
     report: Optional[str]
+    report_thinking: Optional[str]
     web_search_completed: bool
     analysis_completed: bool
     report_completed: bool

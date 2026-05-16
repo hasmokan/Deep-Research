@@ -1,160 +1,163 @@
 'use client';
 
 /**
- * Research results display component with modern card design
+ * ChatGPT-style research answer rendered inline in the conversation.
  */
 
-import { FileText, Brain, BookOpen, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { BrainCircuit, CheckCircle2, ExternalLink, FileText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import type { ResearchResult } from '@/lib/api/types';
-import { useState } from 'react';
+import type { Document, ResearchResult } from '@/lib/api/types';
 
 interface ResultsDisplayProps {
   result: ResearchResult;
 }
 
-interface CollapsibleSectionProps {
-  title: string;
-  description: string;
-  icon: React.ReactNode;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
+function getDocumentTitle(document: Document, index: number) {
+  const title = document.metadata.title;
+  const source = document.metadata.source;
+
+  if (typeof title === 'string' && title.trim()) {
+    return title;
+  }
+  if (typeof source === 'string' && source.trim()) {
+    return source;
+  }
+  return `Source ${index + 1}`;
 }
 
-function CollapsibleSection({
-  title,
-  description,
-  icon,
-  defaultOpen = true,
-  children,
-}: CollapsibleSectionProps) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-
-  return (
-    <div className="glass-card rounded-2xl overflow-hidden transition-smooth">
-      {/* Header */}
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between p-5 cursor-pointer hover:bg-accent/5 transition-smooth"
-      >
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-            {icon}
-          </div>
-          <div className="text-left">
-            <h3 className="font-semibold text-foreground">{title}</h3>
-            <p className="text-sm text-muted-foreground">{description}</p>
-          </div>
-        </div>
-        <div className="text-muted-foreground">
-          {isOpen ? (
-            <ChevronUp className="h-5 w-5" />
-          ) : (
-            <ChevronDown className="h-5 w-5" />
-          )}
-        </div>
-      </button>
-
-      {/* Content */}
-      {isOpen && (
-        <div className="px-5 pb-5 pt-0">
-          <div className="border-t border-border/50 pt-5">
-            {children}
-          </div>
-        </div>
-      )}
-    </div>
-  );
+function getDocumentUrl(document: Document) {
+  const url = document.metadata.url ?? document.metadata.href;
+  return typeof url === 'string' && url.startsWith('http') ? url : null;
 }
 
 export function ResultsDisplay({ result }: ResultsDisplayProps) {
+  const thinkingSections = [
+    { title: 'Analysis thinking', content: result.analysis_thinking },
+    { title: 'Report thinking', content: result.report_thinking },
+  ].filter((section) => section.content);
   const hasDocuments = result.documents && result.documents.length > 0;
 
   return (
-    <div className="space-y-6">
-      {/* Documents Summary */}
-      <CollapsibleSection
-        title="Search Results"
-        description={`Found ${result.documents?.length || 0} relevant documents`}
-        icon={<FileText className="h-5 w-5 text-primary" />}
-        defaultOpen={true}
-      >
-        {hasDocuments ? (
-          <div className="space-y-3">
-            {result.documents.slice(0, 5).map((doc, index) => (
-              <div
-                key={doc.id}
-                className="group p-4 rounded-xl bg-background/50 border border-border/30 hover:border-primary/30 cursor-pointer transition-smooth"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-xs font-medium text-primary">
-                        {index + 1}
-                      </span>
-                      <span className="text-sm font-medium text-foreground">
-                        Document {index + 1}
-                      </span>
+    <div className="mx-auto w-full max-w-[760px] space-y-6">
+      <div className="flex gap-4">
+        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+          <BrainCircuit className="h-4 w-4" />
+        </div>
+        <article className="min-w-0 flex-1">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Research complete
+          </div>
+
+          {result.report ? (
+            <div className="prose prose-base dark:prose-invert max-w-none prose-a:text-foreground prose-code:rounded-[5px] prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-headings:mb-3 prose-headings:mt-7 prose-headings:text-foreground prose-li:my-1 prose-p:my-3 prose-p:leading-7 prose-p:text-foreground prose-strong:text-foreground">
+              <ReactMarkdown>{result.report}</ReactMarkdown>
+            </div>
+          ) : (
+            <p className="text-base leading-7 text-muted-foreground">
+              No report text was returned. The analysis notes below may still contain useful findings.
+            </p>
+          )}
+
+          {result.analysis && (
+            <details className="mt-6 rounded-[16px] border border-border bg-card p-4">
+              <summary className="cursor-pointer text-sm font-medium text-foreground">
+                Analysis notes
+              </summary>
+              <div className="prose prose-sm dark:prose-invert mt-4 max-w-none prose-a:text-foreground prose-headings:text-foreground prose-p:text-muted-foreground prose-strong:text-foreground">
+                <ReactMarkdown>{result.analysis}</ReactMarkdown>
+              </div>
+            </details>
+          )}
+        </article>
+      </div>
+
+      <div className="ml-12 grid gap-3 md:grid-cols-2">
+        <section className="rounded-[16px] border border-border bg-card p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <FileText className="h-4 w-4 text-foreground" />
+              <h3 className="text-sm font-semibold text-foreground">Sources used</h3>
+            </div>
+            <span className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">
+              {result.documents?.length || 0}
+            </span>
+          </div>
+
+          {hasDocuments ? (
+            <div className="space-y-2">
+              {result.documents.slice(0, 4).map((document, index) => {
+                const url = getDocumentUrl(document);
+
+                return (
+                  <div key={document.id} className="flex items-start justify-between gap-3 rounded-[12px] bg-muted/50 p-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {getDocumentTitle(document, index)}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                        {document.content}
+                      </p>
                     </div>
-                    <p className="text-sm text-muted-foreground line-clamp-2">
-                      {doc.content}
-                    </p>
+                    {url && (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={`Open source ${index + 1}`}
+                        className="shrink-0 text-muted-foreground transition-smooth hover:text-foreground"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    )}
                   </div>
-                  {doc.similarity !== undefined && (
-                    <div className="flex flex-col items-end gap-1">
-                      <span className="text-xs font-medium text-primary">
-                        {(doc.similarity * 100).toFixed(0)}%
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        match
-                      </span>
-                    </div>
-                  )}
-                </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-sm leading-6 text-muted-foreground">
+              No source documents were returned for this run.
+            </p>
+          )}
+        </section>
+
+        <section className="rounded-[16px] border border-border bg-card p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-foreground" />
+            <h3 className="text-sm font-semibold text-foreground">Activity history</h3>
+          </div>
+          <div className="space-y-3">
+            {[
+              `Searched ${result.documents?.length || 0} source candidates`,
+              result.analysis ? 'Compared evidence and uncertainty' : 'No analysis returned',
+              result.report ? 'Prepared final answer' : 'No report returned',
+            ].map((item) => (
+              <div key={item} className="flex gap-3">
+                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-foreground" />
+                <p className="text-sm leading-5 text-muted-foreground">{item}</p>
               </div>
             ))}
-            {result.documents.length > 5 && (
-              <Button variant="ghost" className="w-full cursor-pointer">
-                Show {result.documents.length - 5} more documents
-                <ExternalLink className="ml-2 h-4 w-4" />
-              </Button>
-            )}
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground text-center py-4">
-            No documents found for this query
-          </p>
-        )}
-      </CollapsibleSection>
 
-      {/* Analysis */}
-      {result.analysis && (
-        <CollapsibleSection
-          title="AI Analysis"
-          description="Intelligent insights from documents"
-          icon={<Brain className="h-5 w-5 text-primary" />}
-          defaultOpen={true}
-        >
-          <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-foreground prose-p:text-muted-foreground prose-strong:text-foreground prose-a:text-primary">
-            <ReactMarkdown>{result.analysis}</ReactMarkdown>
-          </div>
-        </CollapsibleSection>
-      )}
-
-      {/* Research Report */}
-      {result.report && (
-        <CollapsibleSection
-          title="Research Report"
-          description="Comprehensive research findings"
-          icon={<BookOpen className="h-5 w-5 text-primary" />}
-          defaultOpen={true}
-        >
-          <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-foreground prose-p:text-muted-foreground prose-strong:text-foreground prose-a:text-primary prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded">
-            <ReactMarkdown>{result.report}</ReactMarkdown>
-          </div>
-        </CollapsibleSection>
-      )}
+          {thinkingSections.length > 0 && (
+            <details className="mt-4 rounded-[12px] bg-muted/50 p-3">
+              <summary className="cursor-pointer text-sm font-medium text-foreground">
+                Model thinking details
+              </summary>
+              <div className="mt-3 space-y-3">
+                {thinkingSections.map((section) => (
+                  <div key={section.title}>
+                    <p className="mb-1 text-xs font-medium text-foreground">{section.title}</p>
+                    <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-[10px] border border-border bg-card p-3 text-xs leading-5 text-muted-foreground">
+                      {section.content}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 """Web search service using DuckDuckGo (free, no API key required)"""
 
+import asyncio
 from typing import List, Dict, Any, Optional
 from ddgs import DDGS
 
@@ -28,11 +29,13 @@ class WebSearchService:
             List of search results with title, url, and body
         """
         try:
-            results = list(self.ddgs.text(
-                query,
-                region=region,
-                max_results=max_results
-            ))
+            results = await asyncio.to_thread(
+                lambda: list(self.ddgs.text(
+                    query,
+                    region=region,
+                    max_results=max_results
+                ))
+            )
 
             # Format results
             formatted_results = []
@@ -68,11 +71,13 @@ class WebSearchService:
             List of news results
         """
         try:
-            results = list(self.ddgs.news(
-                query,
-                region=region,
-                max_results=max_results
-            ))
+            results = await asyncio.to_thread(
+                lambda: list(self.ddgs.news(
+                    query,
+                    region=region,
+                    max_results=max_results
+                ))
+            )
 
             formatted_results = []
             for result in results:

@@ -1,122 +1,231 @@
 'use client';
 
 /**
- * Loading state component with skeleton loading and progress steps
+ * Loading state component with live thinking progress and research steps
  */
 
-import { FileSearch, Brain, FileText, CheckCircle2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Activity, Brain, CheckCircle2, Circle, FileSearch, FileText, Sparkles } from 'lucide-react';
+import { loadingThinkingMessages } from '@/lib/research/loading-thinking';
+import { buildResearchActivity } from '@/lib/research/research-workflow';
+import { useResearchStore } from '@/lib/store/research';
+import type { ResearchStreamStatus } from '@/lib/api/types';
+
+type LoadingStatus = 'pending' | 'active' | 'completed';
 
 interface LoadingStep {
   id: string;
   label: string;
   icon: React.ReactNode;
-  status: 'pending' | 'active' | 'completed';
 }
 
 const loadingSteps: LoadingStep[] = [
   {
     id: 'search',
-    label: 'Searching documents',
+    label: 'Searching web',
     icon: <FileSearch className="h-4 w-4" />,
-    status: 'completed',
   },
   {
     id: 'analyze',
-    label: 'Analyzing content',
+    label: 'Reading sources',
     icon: <Brain className="h-4 w-4" />,
-    status: 'active',
   },
   {
     id: 'report',
-    label: 'Generating report',
+    label: 'Drafting report',
     icon: <FileText className="h-4 w-4" />,
-    status: 'pending',
   },
 ];
 
+function getLoadingStatus(index: number, activeIndex: number): LoadingStatus {
+  if (index < activeIndex) {
+    return 'completed';
+  }
+  if (index === activeIndex) {
+    return 'active';
+  }
+  return 'pending';
+}
+
+function getStreamStepIndex(statuses: ResearchStreamStatus[]) {
+  const latestStage = statuses.at(-1)?.stage;
+
+  if (latestStage === 'analyze') {
+    return 1;
+  }
+  if (latestStage === 'report') {
+    return 2;
+  }
+  return 0;
+}
+
 export function LoadingState() {
+  const { streamStatuses, streamThinking } = useResearchStore();
+  const [tick, setTick] = useState(0);
+  const streamActivity = buildResearchActivity(streamStatuses, streamThinking);
+  const hasStreamActivity = streamActivity.length > 0;
+  const fallbackActivity = loadingThinkingMessages.map((message) => ({
+    id: message.stage,
+    stage: message.stage,
+    kind: 'status' as const,
+    title: message.label,
+    detail: message.text,
+  }));
+  const displayActivity = hasStreamActivity ? streamActivity : fallbackActivity;
+  const visibleActivity = displayActivity.slice(-6);
+  const visibleOffset = displayActivity.length - visibleActivity.length;
+  const activeActivityIndex = hasStreamActivity
+    ? streamActivity.length - 1
+    : Math.min(tick, loadingThinkingMessages.length - 1);
+  const activeStepIndex = hasStreamActivity
+    ? getStreamStepIndex(streamStatuses)
+    : Math.min(Math.floor(tick / 2), loadingSteps.length - 1);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setTick((currentTick) => currentTick + 1);
+    }, 1800);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
   return (
-    <div className="glass-strong rounded-2xl p-8">
-      <div className="space-y-8">
-        {/* Header */}
-        <div className="text-center space-y-2">
-          <h3 className="text-lg font-semibold text-foreground">
-            Processing Your Research
-          </h3>
-          <p className="text-sm text-muted-foreground">
-            AI is analyzing documents and generating insights
-          </p>
-        </div>
-
-        {/* Progress Steps */}
-        <div className="flex justify-center">
+    <div className="glass-strong shadow-premium rounded-[8px] p-4 md:p-6">
+      <div className="space-y-6">
+        <div className="flex flex-col gap-4 border-b border-border/70 pb-5 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            {loadingSteps.map((step, index) => (
-              <div key={step.id} className="flex items-center">
-                {/* Step */}
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`
-                      flex h-10 w-10 items-center justify-center rounded-xl
-                      transition-smooth
-                      ${step.status === 'completed'
-                        ? 'bg-green-500/10 text-green-500'
-                        : step.status === 'active'
-                        ? 'bg-primary/10 text-primary animate-pulse-ring'
-                        : 'bg-muted text-muted-foreground'
-                      }
-                    `}
-                  >
-                    {step.status === 'completed' ? (
-                      <CheckCircle2 className="h-5 w-5" />
-                    ) : (
-                      step.icon
-                    )}
-                  </div>
-                  <span
-                    className={`
-                      text-sm font-medium hidden md:block
-                      ${step.status === 'completed'
-                        ? 'text-green-500'
-                        : step.status === 'active'
-                        ? 'text-primary'
-                        : 'text-muted-foreground'
-                      }
-                    `}
-                  >
-                    {step.label}
-                  </span>
-                </div>
-
-                {/* Connector */}
-                {index < loadingSteps.length - 1 && (
-                  <div
-                    className={`
-                      w-8 md:w-12 h-0.5 mx-2
-                      ${step.status === 'completed'
-                        ? 'bg-green-500'
-                        : 'bg-border'
-                      }
-                    `}
-                  />
-                )}
-              </div>
-            ))}
+            <div className="flex h-10 w-10 items-center justify-center rounded-[7px] bg-primary text-primary-foreground">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-foreground">
+                Researching
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                The agent is searching, reading, and building a report you can review.
+              </p>
+            </div>
+          </div>
+          <div className="inline-flex w-fit items-center gap-2 rounded-[7px] border border-border bg-background/70 px-3 py-2 text-xs font-medium text-muted-foreground">
+            <Activity className="h-3.5 w-3.5" />
+            Live stream
           </div>
         </div>
 
-        {/* Skeleton Preview */}
-        <div className="space-y-4">
-          <div className="skeleton h-4 w-3/4 rounded-lg" />
-          <div className="skeleton h-4 w-full rounded-lg" />
-          <div className="skeleton h-4 w-5/6 rounded-lg" />
-          <div className="skeleton h-4 w-2/3 rounded-lg" />
+        <div className="overflow-x-auto pb-1">
+          <div className="flex min-w-[620px] items-center gap-3">
+            {loadingSteps.map((step, index) => {
+              const status = getLoadingStatus(index, activeStepIndex);
+
+              return (
+                <div key={step.id} className="flex flex-1 items-center">
+                  <div
+                    className={`
+                      flex min-w-0 flex-1 items-center gap-3 rounded-[8px] border px-3 py-3 transition-smooth
+                      ${status === 'completed'
+                        ? 'border-foreground/15 bg-foreground text-background'
+                        : status === 'active'
+                        ? 'thinking-scan border-foreground/20 bg-foreground/5 text-foreground'
+                        : 'border-border/70 bg-muted/60 text-muted-foreground'
+                      }
+                    `}
+                  >
+                    <div className="relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-[7px] bg-background/90 text-foreground">
+                      {status === 'completed' ? (
+                        <CheckCircle2 className="h-4 w-4" />
+                      ) : (
+                        step.icon
+                      )}
+                    </div>
+                    <span className="relative z-10 text-sm font-medium">
+                      {step.label}
+                    </span>
+                  </div>
+
+                  {index < loadingSteps.length - 1 && (
+                    <div
+                      className={`
+                        mx-2 h-px w-8 shrink-0 md:w-10
+                        ${status === 'completed' ? 'bg-foreground/70' : 'bg-border'}
+                      `}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Hint */}
-        <p className="text-xs text-muted-foreground text-center">
-          This may take a few moments depending on the complexity of your query
-        </p>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-sm font-semibold text-foreground">Activity history</h4>
+              <p className="text-xs text-muted-foreground">A concise trace of what the research run is doing</p>
+            </div>
+            <span className="rounded-[7px] border border-border px-2.5 py-1 text-xs text-muted-foreground">
+              {displayActivity.length} events
+            </span>
+          </div>
+
+          <div className="overflow-hidden rounded-[8px] border border-border/80 bg-background/70">
+            {visibleActivity.map((event, index) => {
+              const status = getLoadingStatus(index + visibleOffset, activeActivityIndex);
+
+              return (
+                <div
+                  key={event.id}
+                  className={`
+                    flex gap-3 border-b border-border/60 p-4 transition-smooth last:border-b-0
+                    ${status === 'active'
+                      ? 'bg-card'
+                      : ''
+                    }
+                  `}
+                >
+                  <div
+                    className={`
+                      mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-smooth
+                      ${status === 'completed'
+                        ? 'border-foreground bg-foreground text-background'
+                        : status === 'active'
+                        ? 'animate-pulse-ring border-foreground/30 bg-foreground/10 text-foreground'
+                        : 'border-border bg-muted text-muted-foreground'
+                      }
+                    `}
+                  >
+                    {status === 'completed' ? (
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                    ) : status === 'active' ? (
+                      <span className="h-2 w-2 rounded-full bg-foreground" />
+                    ) : (
+                      <Circle className="h-3 w-3" />
+                    )}
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <p
+                      className={`
+                        text-sm font-medium
+                      ${status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}
+                      `}
+                    >
+                      {event.title}
+                    </p>
+                    <p className="text-sm leading-6 text-muted-foreground">
+                      {event.detail}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-2">
+          <div className="skeleton h-2 rounded-full" />
+          <div className="skeleton h-2 rounded-full" />
+          <div className="skeleton h-2 rounded-full" />
+          <div className="skeleton h-2 rounded-full opacity-60" />
+        </div>
       </div>
     </div>
   );
