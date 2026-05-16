@@ -5,11 +5,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, MoreHorizontal, Share, Sparkles } from 'lucide-react';
+import { CheckCircle2, Loader2, MoreHorizontal, Share, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { ChatSidebar } from '@/components/layouts/chat-sidebar';
-import { ErrorState, LoadingState, ResultsDisplay, SearchForm } from '@/components/research';
+import { ErrorState, LoadingState, ReportSidebar, ResultsDisplay, SearchForm } from '@/components/research';
 import { ResearchPlanPanel } from '@/components/research/research-plan-panel';
 import { apiClient } from '@/lib/api';
 import { createResearchPlan, normalizeResearchPlan, type ResearchPlan } from '@/lib/research/research-workflow';
@@ -237,8 +237,26 @@ export default function Home() {
                 )}
 
                 {hasResult && (
-                  <div className="mx-auto w-full max-w-4xl">
+                  <div className="mx-auto w-full max-w-4xl xl:hidden">
                     <ResultsDisplay result={result} />
+                  </div>
+                )}
+
+                {hasResult && (
+                  <div className="mx-auto hidden w-full max-w-[720px] xl:block">
+                    <div className="rounded-[18px] border border-border bg-card p-5 shadow-sm">
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+                          <CheckCircle2 className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-foreground">Research report generated</p>
+                          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                            I opened the full report in the artifact panel on the right. Continue asking follow-up questions here.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -264,6 +282,8 @@ export default function Home() {
           </p>
         </div>
       </main>
+
+      {hasResult && <ReportSidebar result={result} />}
     </div>
   );
 }

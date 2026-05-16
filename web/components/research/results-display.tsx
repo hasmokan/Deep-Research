@@ -5,8 +5,8 @@
  */
 
 import { BrainCircuit, CheckCircle2, ExternalLink, FileText } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
 import type { Document, ResearchResult } from '@/lib/api/types';
+import { MarkdownContent } from './markdown-content';
 
 interface ResultsDisplayProps {
   result: ResearchResult;
@@ -50,9 +50,7 @@ export function ResultsDisplay({ result }: ResultsDisplayProps) {
           </div>
 
           {result.report ? (
-            <div className="prose prose-base dark:prose-invert max-w-none prose-a:text-foreground prose-code:rounded-[5px] prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-headings:mb-3 prose-headings:mt-7 prose-headings:text-foreground prose-li:my-1 prose-p:my-3 prose-p:leading-7 prose-p:text-foreground prose-strong:text-foreground">
-              <ReactMarkdown>{result.report}</ReactMarkdown>
-            </div>
+            <MarkdownContent content={result.report} />
           ) : (
             <p className="text-base leading-7 text-muted-foreground">
               No report text was returned. The analysis notes below may still contain useful findings.
@@ -64,9 +62,10 @@ export function ResultsDisplay({ result }: ResultsDisplayProps) {
               <summary className="cursor-pointer text-sm font-medium text-foreground">
                 Analysis notes
               </summary>
-              <div className="prose prose-sm dark:prose-invert mt-4 max-w-none prose-a:text-foreground prose-headings:text-foreground prose-p:text-muted-foreground prose-strong:text-foreground">
-                <ReactMarkdown>{result.analysis}</ReactMarkdown>
-              </div>
+              <MarkdownContent
+                content={result.analysis}
+                className="mt-4 text-sm"
+              />
             </details>
           )}
         </article>

@@ -131,6 +131,151 @@
   }
 }
 
+@layer components {
+  .research-markdown {
+    color: var(--foreground);
+    font-size: 15px;
+    line-height: 1.82;
+    letter-spacing: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .research-markdown > *:first-child {
+    margin-top: 0;
+  }
+
+  .research-markdown > *:last-child {
+    margin-bottom: 0;
+  }
+
+  .research-markdown h1,
+  .research-markdown h2,
+  .research-markdown h3,
+  .research-markdown h4 {
+    color: var(--foreground);
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.32;
+  }
+
+  .research-markdown h1 {
+    margin: 0 0 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 24px;
+  }
+
+  .research-markdown h2 {
+    margin: 30px 0 12px;
+    padding-top: 4px;
+    font-size: 19px;
+  }
+
+  .research-markdown h3 {
+    margin: 22px 0 10px;
+    font-size: 16px;
+  }
+
+  .research-markdown h4 {
+    margin: 18px 0 8px;
+    font-size: 15px;
+  }
+
+  .research-markdown p {
+    margin: 10px 0;
+    color: color-mix(in srgb, var(--foreground) 88%, transparent);
+  }
+
+  .research-markdown strong {
+    color: var(--foreground);
+    font-weight: 700;
+  }
+
+  .research-markdown a {
+    color: var(--foreground);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+
+  .research-markdown ul,
+  .research-markdown ol {
+    margin: 10px 0 14px;
+    padding-left: 1.35rem;
+  }
+
+  .research-markdown li {
+    margin: 5px 0;
+    padding-left: 0.15rem;
+  }
+
+  .research-markdown li::marker {
+    color: color-mix(in srgb, var(--foreground) 70%, transparent);
+  }
+
+  .research-markdown blockquote {
+    margin: 16px 0;
+    padding: 10px 14px;
+    border-left: 3px solid var(--foreground);
+    border-radius: 0 10px 10px 0;
+    background: color-mix(in srgb, var(--muted) 65%, transparent);
+    color: color-mix(in srgb, var(--foreground) 78%, transparent);
+  }
+
+  .research-markdown code {
+    border-radius: 6px;
+    background: var(--muted);
+    padding: 0.15rem 0.32rem;
+    font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 0.88em;
+  }
+
+  .research-markdown pre {
+    margin: 16px 0;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--muted) 72%, transparent);
+    padding: 14px;
+  }
+
+  .research-markdown pre code {
+    background: transparent;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .research-markdown table {
+    display: block;
+    width: 100%;
+    margin: 16px 0;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  .research-markdown th,
+  .research-markdown td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .research-markdown th {
+    background: var(--muted);
+    color: var(--foreground);
+    font-weight: 700;
+  }
+
+  .research-markdown hr {
+    margin: 24px 0;
+    border: 0;
+    border-top: 1px solid var(--border);
+  }
+}
+
 /* Premium monochrome surface utilities */
 @layer utilities {
   .glass {
