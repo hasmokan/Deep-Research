@@ -13,26 +13,28 @@ import {
   Search,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { chatSidebarRecents, createConversationTitle } from '@/lib/research/chat-shell';
+import type { ResearchSession } from '@/lib/research/sessions';
 
 interface ChatSidebarProps {
-  activeQuery?: string;
+  sessions: ResearchSession[];
+  activeSessionId: string | null;
+  onNewChat: () => void;
+  onSelectSession: (sessionId: string) => void;
 }
 
-const navigationItems = [
-  { label: 'New chat', icon: Edit3 },
+const secondaryNavigationItems = [
   { label: 'Search chats', icon: Search },
   { label: 'Projects', icon: FolderPlus },
   { label: 'Codex', icon: Code2 },
   { label: 'More', icon: MoreHorizontal },
 ];
 
-export function ChatSidebar({ activeQuery }: ChatSidebarProps) {
-  const activeTitle = activeQuery ? createConversationTitle(activeQuery) : null;
-  const recents = activeTitle
-    ? [activeTitle, ...chatSidebarRecents.filter((item) => item !== activeTitle)]
-    : chatSidebarRecents;
-
+export function ChatSidebar({
+  sessions,
+  activeSessionId,
+  onNewChat,
+  onSelectSession,
+}: ChatSidebarProps) {
   return (
     <aside className="hidden h-screen w-[320px] shrink-0 border-r border-border bg-card lg:flex lg:flex-col">
       <div className="flex items-center justify-between px-5 py-5">
@@ -43,7 +45,17 @@ export function ChatSidebar({ activeQuery }: ChatSidebarProps) {
       </div>
 
       <nav className="grid gap-1 px-3">
-        {navigationItems.map((item) => {
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-11 justify-start rounded-[10px] px-3 text-base font-normal"
+          onClick={onNewChat}
+        >
+          <Edit3 className="h-5 w-5" />
+          New chat
+        </Button>
+
+        {secondaryNavigationItems.map((item) => {
           const Icon = item.icon;
 
           return (
@@ -62,16 +74,24 @@ export function ChatSidebar({ activeQuery }: ChatSidebarProps) {
       <div className="mt-7 min-h-0 flex-1 overflow-y-auto px-2">
         <p className="mb-2 px-3 text-sm font-semibold text-foreground">Recents</p>
         <div className="grid gap-1">
-          {recents.map((recent, index) => (
-            <button
-              key={`${recent}-${index}`}
-              className={`truncate rounded-[10px] px-3 py-2.5 text-left text-sm transition-smooth hover:bg-muted ${
-                index === 0 ? 'bg-muted text-foreground' : 'text-foreground'
-              }`}
-            >
-              {recent}
-            </button>
-          ))}
+          {sessions.length > 0 ? (
+            sessions.map((session) => (
+              <button
+                key={session.id}
+                type="button"
+                onClick={() => onSelectSession(session.id)}
+                className={`truncate rounded-[10px] px-3 py-2.5 text-left text-sm transition-smooth hover:bg-muted ${
+                  session.id === activeSessionId ? 'bg-muted text-foreground' : 'text-foreground'
+                }`}
+              >
+                {session.title}
+              </button>
+            ))
+          ) : (
+            <p className="px-3 py-2 text-sm text-muted-foreground">
+              No chats yet
+            </p>
+          )}
         </div>
       </div>
     </aside>

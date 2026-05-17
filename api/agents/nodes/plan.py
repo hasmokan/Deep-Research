@@ -38,6 +38,26 @@ async def generate_research_plan(query: str) -> dict[str, Any]:
     return _normalize_plan_payload(normalized_query, payload)
 
 
+async def assess_research_plan_need(query: str) -> dict[str, Any]:
+    """Ask the model whether this request needs a reviewable research plan."""
+    normalized_query = query.strip()
+
+    llm = ChatOpenAI(
+        model=settings.llm_model,
+        temperature=0,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+    )
+
+    prompt = _build_plan_need_prompt()
+    chain = prompt | llm
+    response = await chain.ainvoke({"query": normalized_query})
+    content, _thinking = extract_response_parts(response)
+    payload = _parse_json_payload(content)
+
+    return _normalize_plan_need_payload(payload)
+
+
 def _build_research_plan_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
@@ -64,6 +84,35 @@ Rules:
                 "user",
                 "Create a research plan for this query:\n\n{query}",
             ),
+        ]
+    )
+
+
+def _build_plan_need_prompt() -> ChatPromptTemplate:
+    return ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """Decide whether a user request needs a visible deep-research plan.
+
+Return valid JSON only:
+{{
+  "should_plan": true,
+  "reason": "brief reason"
+}}
+
+Use should_plan=true for:
+- new broad research tasks
+- multi-step tasks needing source discovery, comparison, and synthesis
+- requests that likely require 3+ distinct research steps
+
+Use should_plan=false for:
+- simple follow-up questions
+- source clarification, "where did this come from?", or narrow factual follow-ups
+- purely conversational or informational requests
+- tasks where the next action is obvious.""",
+            ),
+            ("user", "Request:\n\n{query}"),
         ]
     )
 
@@ -118,6 +167,20 @@ def _normalize_plan_payload(query: str, payload: dict[str, Any]) -> dict[str, An
         "source_label": "Public web",
         "summary": summary,
         "steps": steps,
+        "should_plan": True,
+    }
+
+
+def _normalize_plan_need_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_should_plan = payload.get("should_plan")
+    if isinstance(raw_should_plan, str):
+        should_plan = raw_should_plan.strip().lower() in {"true", "yes", "1"}
+    else:
+        should_plan = bool(raw_should_plan)
+
+    return {
+        "should_plan": should_plan,
+        "reason": str(payload.get("reason", "")).strip(),
     }
 
 

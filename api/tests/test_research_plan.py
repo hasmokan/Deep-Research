@@ -43,9 +43,15 @@ class ResearchPlanRouteTests(TestCase):
             self.assertEqual(query, "Compare AI search products")
             return generated_plan
 
-        with patch(
-            "routers.research.generate_research_plan",
-            side_effect=fake_generate_research_plan,
+        with (
+            patch(
+                "routers.research.assess_research_plan_need",
+                return_value={"should_plan": True, "reason": "Broad research task."},
+            ),
+            patch(
+                "routers.research.generate_research_plan",
+                side_effect=fake_generate_research_plan,
+            ),
         ):
             response = client.post(
                 "/api/research/plan",
@@ -53,7 +59,39 @@ class ResearchPlanRouteTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), generated_plan)
+        self.assertEqual(response.json(), {**generated_plan, "should_plan": True})
+
+    def test_plan_endpoint_can_skip_plan_for_simple_follow_up(self):
+        client = TestClient(app)
+
+        async def fake_assess_research_plan_need(query: str):
+            self.assertEqual(query, "来源是？")
+            return {
+                "should_plan": False,
+                "reason": "Simple informational follow-up.",
+            }
+
+        with (
+            patch(
+                "routers.research.assess_research_plan_need",
+                side_effect=fake_assess_research_plan_need,
+            ),
+            patch("routers.research.generate_research_plan") as generate_plan,
+        ):
+            response = client.post(
+                "/api/research/plan",
+                json={
+                    "query": "来源是？",
+                    "messages": [
+                        {"role": "assistant", "content": "已有研究报告"},
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["should_plan"])
+        self.assertEqual(response.json()["steps"], [])
+        generate_plan.assert_not_called()
 
 
 class ResearchPlanGenerationTests(IsolatedAsyncioTestCase):
@@ -115,3 +153,38 @@ class ResearchPlanGenerationTests(IsolatedAsyncioTestCase):
         self.assertEqual(result["query"], "AI search tools")
         self.assertEqual(result["source_label"], "Public web")
         self.assertEqual(result["steps"][0]["title"], "Scope the market")
+
+    async def test_plan_need_assessment_parses_model_json(self):
+        from agents.nodes import plan
+
+        class FakeResponse:
+            content = '{"should_plan": false, "reason": "Simple source question."}'
+
+        class FakeChain:
+            async def ainvoke(self, payload):
+                self.payload = payload
+                return FakeResponse()
+
+        class FakePrompt:
+            def __or__(self, llm):
+                return FakeChain()
+
+        fake_settings = type(
+            "Settings",
+            (),
+            {
+                "openai_api_key": "api-key",
+                "openai_base_url": "https://api.example.test/v1",
+                "llm_model": "test-model",
+            },
+        )()
+
+        with (
+            patch.object(plan, "settings", fake_settings),
+            patch.object(plan.ChatPromptTemplate, "from_messages", return_value=FakePrompt()),
+            patch.object(plan, "ChatOpenAI"),
+        ):
+            result = await plan.assess_research_plan_need("来源是？")
+
+        self.assertFalse(result["should_plan"])
+        self.assertEqual(result["reason"], "Simple source question.")

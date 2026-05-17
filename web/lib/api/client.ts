@@ -8,6 +8,9 @@ import type {
   ResearchRequest,
   ResearchResponse,
   ResearchResult,
+  ResearchRun,
+  ResearchThread,
+  ResearchThreadUpdate,
   ResearchStreamHandlers,
 } from './types';
 
@@ -74,6 +77,25 @@ class ApiClient {
     });
   }
 
+  async getResearchRun(runId: string): Promise<ResearchRun> {
+    return this.request<ResearchRun>(`/api/research/runs/${encodeURIComponent(runId)}`);
+  }
+
+  async listResearchThreads(): Promise<ResearchThread[]> {
+    return this.request<ResearchThread[]>('/api/research/threads');
+  }
+
+  async getResearchThread(threadId: string): Promise<ResearchThread> {
+    return this.request<ResearchThread>(`/api/research/threads/${encodeURIComponent(threadId)}`);
+  }
+
+  async saveResearchThread(threadId: string, update: ResearchThreadUpdate): Promise<ResearchThread> {
+    return this.request<ResearchThread>(`/api/research/threads/${encodeURIComponent(threadId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(update),
+    });
+  }
+
   /**
    * Execute research and stream progress with Server-Sent Events
    */
@@ -81,63 +103,104 @@ class ApiClient {
     request: ResearchRequest,
     handlers: ResearchStreamHandlers = {}
   ): Promise<ResearchResult> {
-    const url = `${this.baseUrl}/api/research/stream?query=${encodeURIComponent(request.query)}`;
+    const response = await fetch(`${this.baseUrl}/api/research/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+      signal: handlers.signal,
+    });
 
-    return new Promise((resolve, reject) => {
-      const eventSource = new EventSource(url);
-      const abortHandler = () => {
-        eventSource.close();
-        reject(new Error('Research cancelled'));
-      };
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        detail: 'Research stream failed',
+      }));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
 
-      if (handlers.signal?.aborted) {
-        abortHandler();
-        return;
+    if (!response.body) {
+      throw new Error('Research stream response was empty');
+    }
+
+    return this.readResearchStream(response.body, handlers);
+  }
+
+  private async readResearchStream(
+    body: ReadableStream<Uint8Array>,
+    handlers: ResearchStreamHandlers
+  ): Promise<ResearchResult> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() ?? '';
+
+      for (const block of blocks) {
+        const result = this.handleResearchStreamEvent(block, handlers);
+        if (result.type === 'complete') {
+          reader.releaseLock();
+          return result.payload;
+        }
+        if (result.type === 'error') {
+          reader.releaseLock();
+          throw new Error(result.message);
+        }
       }
 
-      handlers.signal?.addEventListener('abort', abortHandler, { once: true });
+      if (done) {
+        break;
+      }
+    }
 
-      const cleanup = () => {
-        eventSource.close();
-        handlers.signal?.removeEventListener('abort', abortHandler);
-      };
+    throw new Error('Research stream ended before completion');
+  }
 
-      eventSource.addEventListener('status', (event) => {
-        handlers.onStatus?.(JSON.parse(event.data));
-      });
+  private handleResearchStreamEvent(
+    block: string,
+    handlers: ResearchStreamHandlers
+  ): { type: 'pending' } | { type: 'complete'; payload: ResearchResult } | { type: 'error'; message: string } {
+    const event = block
+      .split('\n')
+      .find((line) => line.startsWith('event: '))
+      ?.slice('event: '.length)
+      .trim();
+    const data = block
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => line.slice('data: '.length))
+      .join('\n');
 
-      eventSource.addEventListener('documents', (event) => {
-        handlers.onDocuments?.(JSON.parse(event.data).documents ?? []);
-      });
+    if (!event || !data) {
+      return { type: 'pending' };
+    }
 
-      eventSource.addEventListener('thinking', (event) => {
-        handlers.onThinking?.(JSON.parse(event.data));
-      });
+    const payload = JSON.parse(data);
 
-      eventSource.addEventListener('analysis', (event) => {
-        handlers.onAnalysis?.(JSON.parse(event.data).analysis ?? null);
-      });
+    if (event === 'metadata') {
+      handlers.onMetadata?.(payload);
+    } else if (event === 'status') {
+      handlers.onStatus?.(payload);
+    } else if (event === 'documents') {
+      handlers.onDocuments?.(payload.documents ?? []);
+    } else if (event === 'thinking') {
+      handlers.onThinking?.(payload);
+    } else if (event === 'analysis') {
+      handlers.onAnalysis?.(payload.analysis ?? null);
+    } else if (event === 'report') {
+      handlers.onReport?.(payload.report ?? null);
+    } else if (event === 'complete') {
+      return { type: 'complete', payload };
+    } else if (event === 'stream_error') {
+      return { type: 'error', message: payload.detail ?? 'Research stream failed' };
+    }
 
-      eventSource.addEventListener('report', (event) => {
-        handlers.onReport?.(JSON.parse(event.data).report ?? null);
-      });
-
-      eventSource.addEventListener('complete', (event) => {
-        cleanup();
-        resolve(JSON.parse(event.data));
-      });
-
-      eventSource.addEventListener('stream_error', (event) => {
-        cleanup();
-        const message = JSON.parse(event.data).detail ?? 'Research stream failed';
-        reject(new Error(message));
-      });
-
-      eventSource.onerror = () => {
-        cleanup();
-        reject(new Error('Research stream connection failed'));
-      };
-    });
+    return { type: 'pending' };
   }
 
   /**

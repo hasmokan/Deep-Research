@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildResearchActivity,
   createResearchPlan,
+  getResearchSubmitAction,
   normalizeResearchPlan,
 } from './research-workflow.ts';
 
@@ -53,6 +54,7 @@ test('normalizeResearchPlan maps backend generated plan fields into UI fields', 
     query: 'Compare AI search products',
     source_label: 'Public web',
     summary: 'Compare AI search products by source coverage, UX, and report quality.',
+    should_plan: true,
     steps: [
       {
         id: 'scope',
@@ -73,5 +75,39 @@ test('normalizeResearchPlan maps backend generated plan fields into UI fields', 
   assert.deepEqual(
     plan.steps.map((step) => step.title),
     ['Define comparison criteria', 'Collect product and review sources'],
+  );
+});
+
+test('getResearchSubmitAction sends simple follow-ups directly unless deep research mode is on', () => {
+  assert.equal(
+    getResearchSubmitAction({
+      query: '来源是？',
+      hasPlan: false,
+      canSendFollowUp: true,
+      isDeepResearchMode: false,
+    }),
+    'start-research',
+  );
+
+  assert.equal(
+    getResearchSubmitAction({
+      query: '重新做一个竞品调研',
+      hasPlan: false,
+      canSendFollowUp: true,
+      isDeepResearchMode: true,
+    }),
+    'create-plan',
+  );
+});
+
+test('getResearchSubmitAction starts an existing plan when no new query is typed', () => {
+  assert.equal(
+    getResearchSubmitAction({
+      query: '',
+      hasPlan: true,
+      canSendFollowUp: false,
+      isDeepResearchMode: true,
+    }),
+    'start-research',
   );
 });

@@ -2,10 +2,13 @@
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from models.schemas import DocumentResponse, ResearchPlanResponse, ResearchRequest, ResearchResponse
+from models.schemas import DocumentResponse, ResearchPlanResponse, ResearchRequest, ResearchResponse, ResearchThreadUpdate
 from agents.research_agent import research_agent
 from agents.research_stream import stream_research_events
-from agents.nodes.plan import generate_research_plan
+from agents.conversation_context import build_contextual_research_query
+from agents.nodes.plan import assess_research_plan_need, generate_research_plan
+from services.research_runs import research_run_store
+from services.research_threads import research_thread_store
 from services.vector_store import get_vector_store
 from datetime import datetime
 import uuid
@@ -18,8 +21,29 @@ async def create_research_plan(request: ResearchRequest):
     """
     Generate a query-specific research plan before the full research run.
     """
+    if request.thread_id:
+        research_thread_store.upsert_thread(
+            request.thread_id,
+            title=request.query,
+            messages=[message.model_dump() for message in request.messages],
+        )
+
     try:
-        return await generate_research_plan(request.query)
+        plan_need = await assess_research_plan_need(request.query)
+
+        if not plan_need["should_plan"]:
+            return ResearchPlanResponse(
+                query=request.query,
+                source_label="Conversation",
+                summary=plan_need.get("reason") or "This follow-up can be answered directly.",
+                steps=[],
+                should_plan=False,
+            )
+
+        contextual_query = build_contextual_research_query(request.query, request.messages)
+        plan = await generate_research_plan(contextual_query)
+        plan["query"] = request.query
+        return plan
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -34,8 +58,19 @@ async def stream_research(
     """
     Execute research and stream progress/results as Server-Sent Events.
     """
+    run = research_run_store.create_run(query)
+
+    async def events():
+        yield f'event: metadata\ndata: {{"run_id":"{run["run_id"]}"}}\n\n'
+        async for event in stream_research_events(
+            query,
+            run_id=run["run_id"],
+            store=research_run_store,
+        ):
+            yield event
+
     return StreamingResponse(
-        stream_research_events(query),
+        events(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -43,6 +78,85 @@ async def stream_research(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/stream")
+async def stream_research_post(request: ResearchRequest):
+    """
+    Execute research and stream progress/results as Server-Sent Events.
+    Accepts conversation history in the request body for multi-turn follow-ups.
+    """
+    contextual_query = build_contextual_research_query(request.query, request.messages)
+    run = research_run_store.create_run(request.query)
+
+    async def events():
+        yield f'event: metadata\ndata: {{"run_id":"{run["run_id"]}"}}\n\n'
+        async for event in stream_research_events(
+            contextual_query,
+            run_id=run["run_id"],
+            display_query=request.query,
+            store=research_run_store,
+        ):
+            yield event
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/runs/{run_id}")
+async def get_research_run(run_id: str):
+    """
+    Return a persisted research run and its SSE event history.
+    """
+    try:
+        run = research_run_store.get_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Research run {run_id} not found")
+
+    return run
+
+
+@router.get("/threads")
+async def list_research_threads():
+    """Return persisted conversation threads, newest first."""
+    return research_thread_store.list_threads()
+
+
+@router.get("/threads/{thread_id}")
+async def get_research_thread(thread_id: str):
+    """Return one persisted conversation thread."""
+    try:
+        thread = research_thread_store.get_thread(thread_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if thread is None:
+        raise HTTPException(status_code=404, detail=f"Research thread {thread_id} not found")
+
+    return thread
+
+
+@router.put("/threads/{thread_id}")
+async def save_research_thread(thread_id: str, request: ResearchThreadUpdate):
+    """Create or replace a persisted conversation thread snapshot."""
+    try:
+        return research_thread_store.upsert_thread(
+            thread_id,
+            title=request.title,
+            messages=request.messages,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/", response_model=ResearchResponse)
@@ -57,9 +171,10 @@ async def create_research(request: ResearchRequest):
         Research response with ID, query, status, and document count
     """
     try:
-        # Initialize state
+        contextual_query = build_contextual_research_query(request.query, request.messages)
         initial_state = {
-            "query": request.query,
+            "query": contextual_query,
+            "display_query": request.query,
             "documents": [],
             "analysis": None,
             "analysis_thinking": None,
@@ -76,7 +191,7 @@ async def create_research(request: ResearchRequest):
         # Generate response
         return ResearchResponse(
             id=str(uuid.uuid4()),
-            query=result["query"],
+            query=request.query,
             status="completed" if result.get("report_completed") else "failed",
             documents_count=len(result.get("documents", [])),
             created_at=datetime.utcnow().isoformat()
@@ -101,9 +216,10 @@ async def execute_research(request: ResearchRequest):
         Complete research results with documents, analysis, and report
     """
     try:
-        # Initialize state
+        contextual_query = build_contextual_research_query(request.query, request.messages)
         initial_state = {
-            "query": request.query,
+            "query": contextual_query,
+            "display_query": request.query,
             "documents": [],
             "analysis": None,
             "analysis_thinking": None,
@@ -119,7 +235,7 @@ async def execute_research(request: ResearchRequest):
 
         # Return full results
         return {
-            "query": result["query"],
+            "query": request.query,
             "documents": result.get("documents", []),
             "analysis": result.get("analysis"),
             "analysis_thinking": result.get("analysis_thinking"),

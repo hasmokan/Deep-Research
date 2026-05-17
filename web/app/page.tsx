@@ -4,7 +4,7 @@
  * Chatbot-first deep research interface.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Loader2, MoreHorizontal, Share, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
@@ -12,25 +12,96 @@ import { ChatSidebar } from '@/components/layouts/chat-sidebar';
 import { ErrorState, LoadingState, ReportSidebar, ResultsDisplay, SearchForm } from '@/components/research';
 import { ResearchPlanPanel } from '@/components/research/research-plan-panel';
 import { apiClient } from '@/lib/api';
+import {
+  appendResearchActivityStatus,
+  appendResearchActivityThinking,
+  applyResearchRunToActivityMessage,
+  buildResearchRequestMessages,
+  completeResearchActivityMessage,
+  createAssistantResearchActivityMessage,
+  createUserMessage,
+  setResearchActivityRunId,
+  stopRunningResearchActivityMessage,
+  type ConversationMessage,
+  updateResearchActivityMessageStatus,
+} from '@/lib/research/conversation';
 import { createResearchPlan, normalizeResearchPlan, type ResearchPlan } from '@/lib/research/research-workflow';
+import {
+  createResearchSession,
+  createResearchSessionFromServerThread,
+  loadResearchSessionSnapshot,
+  saveResearchSessionSnapshot,
+  updateResearchSessionMessages,
+  upsertResearchSession,
+  type ResearchSession,
+} from '@/lib/research/sessions';
 import { useResearchStore } from '@/lib/store/research';
 
-function UserBubble({ query }: { query: string }) {
+function UserBubble({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
       <div className="max-w-[680px] rounded-[26px] bg-foreground px-5 py-4 text-base leading-7 text-background">
-        {query}
+        {content}
       </div>
     </div>
+  );
+}
+
+function AssistantResultMessage({ message }: { message: ConversationMessage }) {
+  if (!message.result && !message.researchActivity) {
+    return null;
+  }
+
+  return (
+    <>
+      {message.researchActivity && (
+        <div className="mx-auto w-full max-w-[900px]">
+          <LoadingState activity={message.researchActivity} />
+        </div>
+      )}
+
+      {message.result && (
+        <>
+          <div className="mx-auto w-full max-w-4xl xl:hidden">
+            <ResultsDisplay result={message.result} />
+          </div>
+
+          <div className="mx-auto hidden w-full max-w-[720px] xl:block">
+            <div className="rounded-[18px] border border-border bg-card p-5 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+                  <CheckCircle2 className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-foreground">Research report generated</p>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    I opened the full report in the artifact panel on the right. Continue asking follow-up questions here.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </>
   );
 }
 
 export default function Home() {
   const [localQuery, setLocalQuery] = useState('');
   const [researchPlan, setResearchPlan] = useState<ResearchPlan | null>(null);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [sessions, setSessions] = useState<ResearchSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [hasLoadedSessions, setHasLoadedSessions] = useState(false);
   const [isPlanning, setPlanning] = useState(false);
+  const [isDeepResearchMode, setDeepResearchMode] = useState(true);
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
+  const activeResearchRef = useRef<{ sessionId: string; messageId: string } | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const messagesRef = useRef<ConversationMessage[]>([]);
+  const sessionsRef = useRef<ResearchSession[]>([]);
   const {
     query,
     isLoading,
@@ -46,10 +117,115 @@ export default function Home() {
   } = useResearchStore();
 
   const currentQuery = localQuery.trim();
-  const activePlan = researchPlan?.query === currentQuery ? researchPlan : null;
-  const conversationQuery = result?.query || researchPlan?.query || query || currentQuery;
-  const hasConversation = Boolean(conversationQuery || isPlanning || isLoading || error || result);
-  const hasResult = result && !isLoading && !error;
+  const activePlan = researchPlan;
+  const latestCompletedResult = [...messages].reverse().find((message) => message.result)?.result ?? null;
+  const sidebarResult = result || latestCompletedResult;
+  const hasConversation = Boolean(messages.length || activePlan || isPlanning || isLoading || error);
+  const canSendFollowUp = Boolean(latestCompletedResult || result);
+  const activePlanActivityMessage = activePlan
+    ? [...messages].reverse().find((message) => (
+        message.researchActivity?.query === activePlan.query
+      ))
+    : undefined;
+  const visibleMessages = activePlanActivityMessage
+    ? messages.filter((message) => message.id !== activePlanActivityMessage.id)
+    : messages;
+  const hasInlineRunningActivity = messages.some((message) => (
+    message.researchActivity?.status === 'running' && !message.result
+  ));
+
+  useEffect(() => {
+    let cancelled = false;
+    const snapshot = loadResearchSessionSnapshot(window.localStorage);
+
+    const loadServerThreads = async () => {
+      try {
+        const serverThreads = await apiClient.listResearchThreads();
+        if (cancelled || !serverThreads.length) {
+          setHasLoadedSessions(true);
+          return;
+        }
+
+        const serverSessions = serverThreads.map(createResearchSessionFromServerThread);
+        const nextActiveSessionId = serverSessions[0]?.id ?? null;
+        const activeSession = serverSessions[0] ?? null;
+
+        sessionsRef.current = serverSessions;
+        activeSessionIdRef.current = nextActiveSessionId;
+        messagesRef.current = activeSession?.messages ?? [];
+        setSessions(serverSessions);
+        setActiveSessionId(nextActiveSessionId);
+        setMessages(activeSession?.messages ?? []);
+        setQuery(activeSession?.title === 'New chat' ? '' : activeSession?.title ?? '');
+        setResult(activeSession?.latestResult ?? null);
+        setDeepResearchMode(!activeSession?.latestResult);
+        setHasLoadedSessions(true);
+      } catch {
+        if (!cancelled) {
+          setHasLoadedSessions(true);
+        }
+      }
+    };
+
+    if (!snapshot.sessions.length) {
+      void loadServerThreads();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const restoredSessions = snapshot.sessions.map((session) => ({
+      ...session,
+      messages: session.messages.map((message) => (
+        message.researchActivity?.status === 'running' && message.researchActivity.runId
+          ? message
+          : stopRunningResearchActivityMessage(message, session.updatedAt)
+      )),
+    }));
+    const nextActiveSessionId = snapshot.activeSessionId
+      && restoredSessions.some((session) => session.id === snapshot.activeSessionId)
+      ? snapshot.activeSessionId
+      : restoredSessions[0]?.id ?? null;
+    const activeSession = restoredSessions.find((session) => session.id === nextActiveSessionId) ?? null;
+
+    sessionsRef.current = restoredSessions;
+    activeSessionIdRef.current = nextActiveSessionId;
+    messagesRef.current = activeSession?.messages ?? [];
+    setSessions(restoredSessions);
+    setActiveSessionId(nextActiveSessionId);
+    setMessages(activeSession?.messages ?? []);
+    setQuery(activeSession?.title === 'New chat' ? '' : activeSession?.title ?? '');
+    setResult(activeSession?.latestResult ?? null);
+    setDeepResearchMode(!activeSession?.latestResult);
+    setHasLoadedSessions(true);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setQuery, setResult]);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    if (!hasLoadedSessions) {
+      return;
+    }
+
+    saveResearchSessionSnapshot(window.localStorage, {
+      activeSessionId,
+      sessions,
+    });
+  }, [activeSessionId, hasLoadedSessions, sessions]);
 
   useEffect(() => {
     if (hasConversation) {
@@ -58,12 +234,179 @@ export default function Home() {
         block: 'end',
       });
     }
-  }, [hasConversation, researchPlan, isPlanning, isLoading, error, result]);
+  }, [hasConversation, messages, researchPlan, isPlanning, isLoading, error, result]);
+
+  const persistMessagesToSession = useCallback((sessionId: string, nextMessages: ConversationMessage[]) => {
+    const existingSession = sessionsRef.current.find((session) => session.id === sessionId);
+    const session = existingSession ?? createResearchSession({ id: sessionId });
+    const updatedSession = updateResearchSessionMessages(session, nextMessages);
+    const nextSessions = upsertResearchSession(
+      {
+        activeSessionId: activeSessionIdRef.current,
+        sessions: sessionsRef.current,
+      },
+      updatedSession,
+    ).sessions;
+
+    sessionsRef.current = nextSessions;
+    setSessions(nextSessions);
+    void apiClient.saveResearchThread(updatedSession.id, {
+      title: updatedSession.title,
+      messages: updatedSession.messages as unknown as Record<string, unknown>[],
+    }).catch(() => undefined);
+  }, []);
+
+  const saveActiveSessionMessages = (nextMessages: ConversationMessage[]) => {
+    if (!activeSessionIdRef.current && nextMessages.length === 0) {
+      return null;
+    }
+
+    const existingSession = sessionsRef.current.find((session) => session.id === activeSessionIdRef.current);
+    const session = existingSession ?? createResearchSession();
+    const updatedSession = updateResearchSessionMessages(session, nextMessages);
+    const nextSessions = upsertResearchSession(
+      {
+        activeSessionId: updatedSession.id,
+        sessions: sessionsRef.current,
+      },
+      updatedSession,
+    ).sessions;
+
+    activeSessionIdRef.current = updatedSession.id;
+    sessionsRef.current = nextSessions;
+    setActiveSessionId(updatedSession.id);
+    setSessions(nextSessions);
+
+    return updatedSession.id;
+  };
+
+  const commitVisibleMessages = (nextMessages: ConversationMessage[], sessionId: string | null = activeSessionIdRef.current) => {
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+
+    if (sessionId) {
+      persistMessagesToSession(sessionId, nextMessages);
+    } else {
+      saveActiveSessionMessages(nextMessages);
+    }
+  };
+
+  const updateResearchActivityMessage = useCallback((
+    sessionId: string,
+    messageId: string,
+    updateMessage: (message: ConversationMessage) => ConversationMessage,
+  ) => {
+    const sourceMessages = activeSessionIdRef.current === sessionId
+      ? messagesRef.current
+      : sessionsRef.current.find((session) => session.id === sessionId)?.messages ?? [];
+    const nextMessages = sourceMessages.map((message) => (
+      message.id === messageId ? updateMessage(message) : message
+    ));
+
+    if (activeSessionIdRef.current === sessionId) {
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+    }
+
+    persistMessagesToSession(sessionId, nextMessages);
+  }, [persistMessagesToSession]);
+
+  useEffect(() => {
+    if (!hasLoadedSessions) {
+      return;
+    }
+
+    const pendingActivities = sessionsRef.current.flatMap((session) => (
+      session.messages
+        .filter((message) => (
+          message.researchActivity?.status === 'running' && message.researchActivity.runId
+        ))
+        .map((message) => ({
+          sessionId: session.id,
+          messageId: message.id,
+          runId: message.researchActivity?.runId ?? '',
+        }))
+    ));
+
+    if (!pendingActivities.length) {
+      return;
+    }
+
+    void Promise.all(pendingActivities.map(async (activity) => {
+      try {
+        const run = await apiClient.getResearchRun(activity.runId);
+        updateResearchActivityMessage(
+          activity.sessionId,
+          activity.messageId,
+          (message) => applyResearchRunToActivityMessage(message, run),
+        );
+      } catch {
+        updateResearchActivityMessage(
+          activity.sessionId,
+          activity.messageId,
+          (message) => updateResearchActivityMessageStatus(message, 'stopped'),
+        );
+      }
+    }));
+  }, [hasLoadedSessions, updateResearchActivityMessage]);
+
+  const activateSession = (session: ResearchSession) => {
+    abortControllerRef.current?.abort();
+    activeSessionIdRef.current = session.id;
+    messagesRef.current = session.messages;
+    setActiveSessionId(session.id);
+    setMessages(session.messages);
+    setResearchPlan(null);
+    setLocalQuery('');
+    setQuery(session.title === 'New chat' ? '' : session.title);
+    setError(null);
+    setResult(session.latestResult);
+    setDeepResearchMode(!session.latestResult);
+    resetStream();
+    setLoading(false);
+  };
+
+  const handleNewChat = () => {
+    const session = createResearchSession();
+    const nextSessions = upsertResearchSession(
+      {
+        activeSessionId: session.id,
+        sessions: sessionsRef.current,
+      },
+      session,
+    ).sessions;
+
+    sessionsRef.current = nextSessions;
+    setSessions(nextSessions);
+    activateSession(session);
+  };
+
+  const handleSelectSession = (sessionId: string) => {
+    const session = sessionsRef.current.find((storedSession) => storedSession.id === sessionId);
+
+    if (!session) {
+      return;
+    }
+
+    activateSession(session);
+  };
+
+  const removeLastUserMessageForQuery = (messageQuery: string) => {
+    const lastMessage = messagesRef.current.at(-1);
+
+    if (lastMessage?.role !== 'user' || lastMessage.content !== messageQuery) {
+      return;
+    }
+
+    const nextMessages = messagesRef.current.slice(0, -1);
+    commitVisibleMessages(nextMessages);
+  };
 
   const handleQueryChange = (nextQuery: string) => {
     setLocalQuery(nextQuery);
 
-    if (researchPlan && nextQuery.trim() !== researchPlan.query) {
+    if (researchPlan && nextQuery.trim() && nextQuery.trim() !== researchPlan.query) {
+      removeLastUserMessageForQuery(researchPlan.query);
       setResearchPlan(null);
     }
   };
@@ -75,8 +418,13 @@ export default function Home() {
     }
 
     const requestedQuery = currentQuery;
+    const history = buildResearchRequestMessages(messagesRef.current);
+    const userMessage = createUserMessage(requestedQuery);
+    const nextMessages = [...messagesRef.current, userMessage];
 
-    setQuery(currentQuery);
+    commitVisibleMessages(nextMessages);
+    setQuery(requestedQuery);
+    setLocalQuery('');
     setError(null);
     setResult(null);
     resetStream();
@@ -84,8 +432,24 @@ export default function Home() {
     setPlanning(true);
 
     try {
-      const generatedPlan = await apiClient.createResearchPlan({ query: requestedQuery });
-      setResearchPlan(normalizeResearchPlan(generatedPlan));
+      const generatedPlan = await apiClient.createResearchPlan({
+        query: requestedQuery,
+        thread_id: activeSessionIdRef.current ?? undefined,
+        messages: history,
+      });
+      const normalizedPlan = normalizeResearchPlan(generatedPlan);
+
+      if (!normalizedPlan.shouldPlan) {
+        setResearchPlan(null);
+        setPlanning(false);
+        await handleStartResearch(requestedQuery, {
+          skipPlan: true,
+          appendUserMessage: false,
+        });
+        return;
+      }
+
+      setResearchPlan(normalizedPlan);
     } catch {
       setResearchPlan(createResearchPlan(requestedQuery));
     } finally {
@@ -93,43 +457,121 @@ export default function Home() {
     }
   };
 
-  const handleStartResearch = async () => {
-    if (!currentQuery) {
+  const handleStartResearch = async (
+    queryOverride?: string,
+    options: { skipPlan?: boolean; appendUserMessage?: boolean } = {},
+  ) => {
+    const researchQuery = queryOverride?.trim() || activePlan?.query || query || currentQuery;
+
+    if (!researchQuery) {
       setError('Please enter a research query');
       return;
     }
 
-    if (!activePlan) {
+    if (!activePlan && !options.skipPlan) {
       void handleCreatePlan();
       return;
     }
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
+    const history = buildResearchRequestMessages(messagesRef.current);
+    const shouldAppendUserMessage = options.appendUserMessage ?? Boolean(queryOverride?.trim());
+    const userMessage = shouldAppendUserMessage && queryOverride?.trim()
+      ? createUserMessage(queryOverride)
+      : null;
+    const activityMessage = createAssistantResearchActivityMessage(researchQuery);
+    const startingMessages = userMessage
+      ? [...messagesRef.current, userMessage, activityMessage]
+      : [...messagesRef.current, activityMessage];
+    const runSessionId = saveActiveSessionMessages(startingMessages);
+
+    messagesRef.current = startingMessages;
+    setMessages(startingMessages);
+
+    if (!runSessionId) {
+      setError('Unable to save this research session');
+      return;
+    }
+
+    activeResearchRef.current = {
+      sessionId: runSessionId,
+      messageId: activityMessage.id,
+    };
 
     try {
-      setQuery(currentQuery);
+      setQuery(researchQuery);
+      if (queryOverride?.trim()) {
+        setLocalQuery('');
+      }
+      if (options.skipPlan) {
+        setResearchPlan(null);
+      }
       setLoading(true);
       setError(null);
       setResult(null);
       resetStream();
 
       const researchResult = await apiClient.streamResearch(
-        { query: currentQuery },
         {
-          onStatus: addStreamStatus,
-          onThinking: addStreamThinking,
+            query: researchQuery,
+            thread_id: runSessionId,
+            messages: history,
+        },
+        {
+          onMetadata: (metadata) => {
+            updateResearchActivityMessage(
+              runSessionId,
+              activityMessage.id,
+              (message) => setResearchActivityRunId(message, metadata.run_id),
+            );
+          },
+          onStatus: (status) => {
+            addStreamStatus(status);
+            updateResearchActivityMessage(
+              runSessionId,
+              activityMessage.id,
+              (message) => appendResearchActivityStatus(message, status),
+            );
+          },
+          onThinking: (thinking) => {
+            addStreamThinking(thinking);
+            updateResearchActivityMessage(
+              runSessionId,
+              activityMessage.id,
+              (message) => appendResearchActivityThinking(message, thinking),
+            );
+          },
           signal: abortController.signal,
         },
       ).catch((streamError) => {
         if (abortController.signal.aborted) {
           throw streamError;
         }
-        return apiClient.executeResearch({ query: currentQuery });
+        return apiClient.executeResearch({
+          query: researchQuery,
+          thread_id: runSessionId,
+          messages: history,
+        });
       });
 
+      updateResearchActivityMessage(
+        runSessionId,
+        activityMessage.id,
+        (message) => completeResearchActivityMessage(message, researchResult),
+      );
       setResult(researchResult);
+      setDeepResearchMode(false);
     } catch (researchError) {
+      updateResearchActivityMessage(
+        runSessionId,
+        activityMessage.id,
+        (message) => updateResearchActivityMessageStatus(
+          message,
+          abortController.signal.aborted ? 'stopped' : 'failed',
+        ),
+      );
+
       if (!abortController.signal.aborted) {
         setError(researchError instanceof Error ? researchError.message : 'An error occurred');
       }
@@ -137,17 +579,33 @@ export default function Home() {
       if (abortControllerRef.current === abortController) {
         abortControllerRef.current = null;
       }
+      if (activeResearchRef.current?.messageId === activityMessage.id) {
+        activeResearchRef.current = null;
+      }
       setLoading(false);
     }
   };
 
   const handleStop = () => {
     abortControllerRef.current?.abort();
+    const activeResearch = activeResearchRef.current;
+
+    if (activeResearch) {
+      updateResearchActivityMessage(
+        activeResearch.sessionId,
+        activeResearch.messageId,
+        (message) => updateResearchActivityMessageStatus(message, 'stopped'),
+      );
+    }
   };
 
   const handleCancelPlan = () => {
     abortControllerRef.current?.abort();
+    if (researchPlan) {
+      removeLastUserMessageForQuery(researchPlan.query);
+    }
     setResearchPlan(null);
+    setLocalQuery('');
     setQuery('');
     setError(null);
     setResult(null);
@@ -155,12 +613,29 @@ export default function Home() {
   };
 
   const handleEditPlan = () => {
+    const planQuery = researchPlan?.query;
+
+    if (researchPlan) {
+      setLocalQuery(researchPlan.query);
+    }
+    if (planQuery) {
+      removeLastUserMessageForQuery(planQuery);
+    }
     setResearchPlan(null);
+  };
+
+  const handleToggleDeepResearchMode = () => {
+    setDeepResearchMode((enabled) => !enabled);
   };
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background text-foreground">
-      <ChatSidebar activeQuery={conversationQuery} />
+      <ChatSidebar
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onNewChat={handleNewChat}
+        onSelectSession={handleSelectSession}
+      />
 
       <main className="relative flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
         <header className="z-40 flex h-16 shrink-0 items-center justify-between bg-background/85 px-4 backdrop-blur-xl lg:px-6">
@@ -203,12 +678,19 @@ export default function Home() {
 
             {hasConversation && (
               <div className="space-y-8">
-                {conversationQuery && <UserBubble query={conversationQuery} />}
+                {visibleMessages.map((message) => (
+                  message.role === 'user' ? (
+                    <UserBubble key={message.id} content={message.content} />
+                  ) : (
+                    <AssistantResultMessage key={message.id} message={message} />
+                  )
+                ))}
 
-                {activePlan && !hasResult && (
+                {activePlan && (
                   <div className="mx-auto max-w-[820px]">
                     <ResearchPlanPanel
                       plan={activePlan}
+                      activity={activePlanActivityMessage?.researchActivity}
                       isLoading={isLoading}
                       onEdit={handleEditPlan}
                       onCancel={handleCancelPlan}
@@ -224,7 +706,7 @@ export default function Home() {
                   </div>
                 )}
 
-                {isLoading && (
+                {isLoading && !hasInlineRunningActivity && (
                   <div className="mx-auto max-w-[900px]">
                     <LoadingState />
                   </div>
@@ -233,30 +715,6 @@ export default function Home() {
                 {error && !isLoading && (
                   <div className="mx-auto max-w-[720px]">
                     <ErrorState error={error} />
-                  </div>
-                )}
-
-                {hasResult && (
-                  <div className="mx-auto w-full max-w-4xl xl:hidden">
-                    <ResultsDisplay result={result} />
-                  </div>
-                )}
-
-                {hasResult && (
-                  <div className="mx-auto hidden w-full max-w-[720px] xl:block">
-                    <div className="rounded-[18px] border border-border bg-card p-5 shadow-sm">
-                      <div className="flex items-start gap-3">
-                        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
-                          <CheckCircle2 className="h-4 w-4" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-foreground">Research report generated</p>
-                          <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                            I opened the full report in the artifact panel on the right. Continue asking follow-up questions here.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
                   </div>
                 )}
 
@@ -272,9 +730,12 @@ export default function Home() {
             isLoading={isLoading}
             isPlanning={isPlanning}
             hasPlan={Boolean(activePlan)}
+            canSendFollowUp={canSendFollowUp}
+            isDeepResearchMode={isDeepResearchMode}
             onQueryChange={handleQueryChange}
             onCreatePlan={handleCreatePlan}
             onStartResearch={handleStartResearch}
+            onToggleDeepResearchMode={handleToggleDeepResearchMode}
             onStop={handleStop}
           />
           <p className="mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground">
@@ -283,7 +744,7 @@ export default function Home() {
         </div>
       </main>
 
-      {hasResult && <ReportSidebar result={result} />}
+      {sidebarResult && <ReportSidebar result={sidebarResult} />}
     </div>
   );
 }

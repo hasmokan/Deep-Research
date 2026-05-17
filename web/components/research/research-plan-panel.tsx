@@ -6,10 +6,13 @@
 
 import { CheckCircle2, Globe2, ListChecks } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { LoadingState } from './loading-state';
+import type { ConversationResearchActivity } from '@/lib/research/conversation';
 import type { ResearchPlan } from '@/lib/research/research-workflow';
 
 interface ResearchPlanPanelProps {
   plan: ResearchPlan;
+  activity?: ConversationResearchActivity;
   isLoading?: boolean;
   onEdit?: () => void;
   onCancel?: () => void;
@@ -18,6 +21,7 @@ interface ResearchPlanPanelProps {
 
 export function ResearchPlanPanel({
   plan,
+  activity,
   isLoading = false,
   onEdit,
   onCancel,
@@ -66,6 +70,12 @@ export function ResearchPlanPanel({
           </div>
         ))}
       </div>
+
+      {activity && (
+        <div className="mt-5 border-t border-border/70 pt-5">
+          <LoadingState activity={activity} />
+        </div>
+      )}
 
       {(onEdit || onCancel || onStart) && (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2">

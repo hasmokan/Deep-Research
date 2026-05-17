@@ -6,6 +6,7 @@
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { getResearchSubmitAction } from '@/lib/research/research-workflow';
 import {
   CircleStop,
   Globe2,
@@ -23,9 +24,12 @@ interface SearchFormProps {
   isLoading: boolean;
   isPlanning?: boolean;
   hasPlan: boolean;
+  canSendFollowUp?: boolean;
+  isDeepResearchMode: boolean;
   onQueryChange: (query: string) => void;
   onCreatePlan: () => void | Promise<void>;
-  onStartResearch: () => void;
+  onStartResearch: (queryOverride?: string, options?: { skipPlan?: boolean }) => void;
+  onToggleDeepResearchMode: () => void;
   onStop: () => void;
 }
 
@@ -34,9 +38,12 @@ export function SearchForm({
   isLoading,
   isPlanning = false,
   hasPlan,
+  canSendFollowUp = false,
+  isDeepResearchMode,
   onQueryChange,
   onCreatePlan,
   onStartResearch,
+  onToggleDeepResearchMode,
   onStop,
 }: SearchFormProps) {
   const currentQuery = query.trim();
@@ -53,16 +60,37 @@ export function SearchForm({
       return;
     }
 
-    if (!currentQuery) {
+    const action = getResearchSubmitAction({
+      query: currentQuery,
+      hasPlan,
+      canSendFollowUp,
+      isDeepResearchMode,
+    });
+
+    if (action === 'none') {
       return;
     }
 
-    if (hasPlan) {
-      onStartResearch();
+    if (action === 'start-research') {
+      if (hasPlan && !currentQuery) {
+        onStartResearch();
+        return;
+      }
+
+      onStartResearch(currentQuery, { skipPlan: true });
       return;
     }
 
     onCreatePlan();
+  };
+
+  const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
   };
 
   return (
@@ -74,6 +102,7 @@ export function SearchForm({
         placeholder="Get a detailed report"
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
+        onKeyDown={handleTextareaKeyDown}
         disabled={isLoading || isPlanning}
         rows={2}
         className="min-h-12 resize-none border-0 bg-transparent px-4 py-2 text-base shadow-none focus-visible:ring-0"
@@ -92,8 +121,10 @@ export function SearchForm({
           </Button>
           <Button
             type="button"
-            variant="ghost"
-            className="h-9 rounded-full px-3 text-sm text-foreground"
+            variant={isDeepResearchMode ? 'secondary' : 'ghost'}
+            className="h-9 rounded-full px-3 text-sm"
+            aria-pressed={isDeepResearchMode}
+            onClick={onToggleDeepResearchMode}
           >
             <SlidersHorizontal className="h-4 w-4" />
             Deep research

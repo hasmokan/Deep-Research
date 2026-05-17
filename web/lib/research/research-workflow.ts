@@ -15,6 +15,16 @@ export interface ResearchPlan {
   sourceLabel: string;
   summary: string;
   steps: ResearchPlanStep[];
+  shouldPlan: boolean;
+}
+
+export type ResearchSubmitAction = 'none' | 'create-plan' | 'start-research';
+
+export interface ResearchSubmitDecisionInput {
+  query: string;
+  hasPlan: boolean;
+  canSendFollowUp: boolean;
+  isDeepResearchMode: boolean;
 }
 
 export interface ResearchActivityEvent {
@@ -32,6 +42,7 @@ export function createResearchPlan(query: string): ResearchPlan {
     query: normalizedQuery,
     sourceLabel: 'Public web',
     summary: `Research "${normalizedQuery}" across public web sources, compare evidence, and produce a cited report.`,
+    shouldPlan: true,
     steps: [
       {
         id: 'clarify',
@@ -62,12 +73,40 @@ export function normalizeResearchPlan(response: ResearchPlanResponse): ResearchP
     query: response.query,
     sourceLabel: response.source_label,
     summary: response.summary,
+    shouldPlan: response.should_plan,
     steps: response.steps.map((step) => ({
       id: step.id,
       title: step.title,
       detail: step.detail,
     })),
   };
+}
+
+export function getResearchSubmitAction({
+  query,
+  hasPlan,
+  canSendFollowUp,
+  isDeepResearchMode,
+}: ResearchSubmitDecisionInput): ResearchSubmitAction {
+  const hasQuery = query.trim().length > 0;
+
+  if (!hasQuery && !hasPlan) {
+    return 'none';
+  }
+
+  if (hasQuery && canSendFollowUp && !isDeepResearchMode) {
+    return 'start-research';
+  }
+
+  if (hasQuery) {
+    return 'create-plan';
+  }
+
+  if (hasPlan) {
+    return 'start-research';
+  }
+
+  return 'none';
 }
 
 export function buildResearchActivity(

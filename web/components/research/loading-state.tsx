@@ -10,6 +10,7 @@ import { loadingThinkingMessages } from '@/lib/research/loading-thinking';
 import { buildResearchActivity } from '@/lib/research/research-workflow';
 import { useResearchStore } from '@/lib/store/research';
 import type { ResearchStreamStatus } from '@/lib/api/types';
+import type { ConversationResearchActivity, ResearchActivityStatus } from '@/lib/research/conversation';
 
 type LoadingStatus = 'pending' | 'active' | 'completed';
 
@@ -17,6 +18,10 @@ interface LoadingStep {
   id: string;
   label: string;
   icon: React.ReactNode;
+}
+
+interface LoadingStateProps {
+  activity?: ConversationResearchActivity;
 }
 
 const loadingSteps: LoadingStep[] = [
@@ -59,9 +64,65 @@ function getStreamStepIndex(statuses: ResearchStreamStatus[]) {
   return 0;
 }
 
-export function LoadingState() {
-  const { streamStatuses, streamThinking } = useResearchStore();
+function getTitle(status: ResearchActivityStatus) {
+  if (status === 'completed') {
+    return 'Research trace';
+  }
+  if (status === 'failed') {
+    return 'Research interrupted';
+  }
+  if (status === 'stopped') {
+    return 'Research stopped';
+  }
+  return 'Researching';
+}
+
+function getBadgeLabel(status: ResearchActivityStatus) {
+  if (status === 'completed') {
+    return 'Saved trace';
+  }
+  if (status === 'failed') {
+    return 'Needs retry';
+  }
+  if (status === 'stopped') {
+    return 'Stopped';
+  }
+  return 'Live stream';
+}
+
+function getStepDisplayStatus(
+  index: number,
+  activeIndex: number,
+  activityStatus: ResearchActivityStatus,
+): LoadingStatus {
+  if (activityStatus === 'completed') {
+    return 'completed';
+  }
+
+  return getLoadingStatus(index, activeIndex);
+}
+
+function getActivityDisplayStatus(
+  index: number,
+  activeIndex: number,
+  activityStatus: ResearchActivityStatus,
+): LoadingStatus {
+  if (activityStatus === 'completed') {
+    return 'completed';
+  }
+  if (activityStatus === 'failed' || activityStatus === 'stopped') {
+    return index < activeIndex ? 'completed' : getLoadingStatus(index, activeIndex);
+  }
+
+  return getLoadingStatus(index, activeIndex);
+}
+
+export function LoadingState({ activity }: LoadingStateProps = {}) {
+  const store = useResearchStore();
   const [tick, setTick] = useState(0);
+  const streamStatuses = activity?.streamStatuses ?? store.streamStatuses;
+  const streamThinking = activity?.streamThinking ?? store.streamThinking;
+  const activityStatus = activity?.status ?? 'running';
   const streamActivity = buildResearchActivity(streamStatuses, streamThinking);
   const hasStreamActivity = streamActivity.length > 0;
   const fallbackActivity = loadingThinkingMessages.map((message) => ({
@@ -82,12 +143,16 @@ export function LoadingState() {
     : Math.min(Math.floor(tick / 2), loadingSteps.length - 1);
 
   useEffect(() => {
+    if (activityStatus !== 'running') {
+      return undefined;
+    }
+
     const interval = window.setInterval(() => {
       setTick((currentTick) => currentTick + 1);
     }, 1800);
 
     return () => window.clearInterval(interval);
-  }, []);
+  }, [activityStatus]);
 
   return (
     <div className="glass-strong shadow-premium rounded-[8px] p-4 md:p-6">
@@ -99,23 +164,25 @@ export function LoadingState() {
             </div>
             <div>
               <h3 className="text-lg font-semibold text-foreground">
-                Researching
+                {getTitle(activityStatus)}
               </h3>
               <p className="text-sm text-muted-foreground">
-                The agent is searching, reading, and building a report you can review.
+                {activity?.query
+                  ? `Query: ${activity.query}`
+                  : 'The agent is searching, reading, and building a report you can review.'}
               </p>
             </div>
           </div>
           <div className="inline-flex w-fit items-center gap-2 rounded-[7px] border border-border bg-background/70 px-3 py-2 text-xs font-medium text-muted-foreground">
             <Activity className="h-3.5 w-3.5" />
-            Live stream
+            {getBadgeLabel(activityStatus)}
           </div>
         </div>
 
         <div className="overflow-x-auto pb-1">
           <div className="flex min-w-[620px] items-center gap-3">
             {loadingSteps.map((step, index) => {
-              const status = getLoadingStatus(index, activeStepIndex);
+              const status = getStepDisplayStatus(index, activeStepIndex, activityStatus);
 
               return (
                 <div key={step.id} className="flex flex-1 items-center">
@@ -169,7 +236,11 @@ export function LoadingState() {
 
           <div className="overflow-hidden rounded-[8px] border border-border/80 bg-background/70">
             {visibleActivity.map((event, index) => {
-              const status = getLoadingStatus(index + visibleOffset, activeActivityIndex);
+              const status = getActivityDisplayStatus(
+                index + visibleOffset,
+                activeActivityIndex,
+                activityStatus,
+              );
 
               return (
                 <div

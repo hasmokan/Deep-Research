@@ -20,13 +20,14 @@ async def generate_node(state: dict[str, Any]) -> dict[str, Any]:
         Updated state with 'report' field
     """
     query = state["query"]
+    display_query = state.get("display_query") or query
     analysis = state.get("analysis", "")
     documents_count = len(state.get("documents", []))
 
     # If no analysis available, return a simple message
     if not analysis or "No relevant documents" in analysis:
         return {
-            "report": f"# Research Report: {query}\n\nNo relevant documents found. Please try a different query or add more documents to the database.",
+            "report": f"# Research Report: {display_query}\n\nNo relevant documents found. Please try a different query or add more documents to the database.",
             "report_completed": True
         }
 
@@ -52,7 +53,10 @@ The report should include:
 
 Use markdown formatting with proper headings, bullet points, and emphasis where appropriate.
 Write in a professional, objective tone."""),
-        ("user", """Research Query: {query}
+        ("user", """User-Facing Research Request: {display_query}
+
+Conversation-Aware Research Query:
+{query}
 
 Analysis:
 {analysis}
@@ -66,6 +70,7 @@ Please generate a comprehensive research report.""")
     chain = prompt | llm
     response = await chain.ainvoke({
         "query": query,
+        "display_query": display_query,
         "analysis": analysis,
         "documents_count": documents_count
     })

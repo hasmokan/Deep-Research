@@ -10,6 +10,7 @@ from agents.nodes.generate import generate_node
 class ResearchState(TypedDict):
     """State definition for research agent"""
     query: str
+    display_query: Optional[str]
     documents: List[Dict[str, Any]]
     analysis: Optional[str]
     analysis_thinking: Optional[str]
