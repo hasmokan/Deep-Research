@@ -186,6 +186,8 @@ class ApiClient {
       handlers.onMetadata?.(payload);
     } else if (event === 'status') {
       handlers.onStatus?.(payload);
+    } else if (event === 'trace') {
+      handlers.onTrace?.(payload);
     } else if (event === 'documents') {
       handlers.onDocuments?.(payload.documents ?? []);
     } else if (event === 'thinking') {
@@ -194,6 +196,8 @@ class ApiClient {
       handlers.onAnalysis?.(payload.analysis ?? null);
     } else if (event === 'report') {
       handlers.onReport?.(payload.report ?? null);
+    } else if (event === 'answer') {
+      handlers.onAnswer?.(payload.answer ?? null);
     } else if (event === 'complete') {
       return { type: 'complete', payload };
     } else if (event === 'stream_error') {

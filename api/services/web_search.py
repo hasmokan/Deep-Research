@@ -44,7 +44,9 @@ class WebSearchService:
                     "title": result.get("title", ""),
                     "url": result.get("href", ""),
                     "content": result.get("body", ""),
-                    "source": "duckduckgo"
+                    "source": "duckduckgo",
+                    "provider": "duckduckgo",
+                    "type": "web_search",
                 })
 
             return formatted_results
@@ -87,6 +89,7 @@ class WebSearchService:
                     "content": result.get("body", ""),
                     "date": result.get("date", ""),
                     "source": result.get("source", ""),
+                    "provider": "duckduckgo",
                     "type": "news"
                 })
 

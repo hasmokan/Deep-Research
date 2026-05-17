@@ -19,6 +19,16 @@ const completedResult = {
   status: 'completed',
 };
 
+const answerResult = {
+  query: '来源是？',
+  documents: [],
+  analysis: null,
+  report: null,
+  answer: '上一份报告使用了这些来源。',
+  result_type: 'answer' as const,
+  status: 'completed',
+};
+
 function createMemoryStorage(initialValue?: string) {
   let value = initialValue ?? null;
 
@@ -47,6 +57,23 @@ test('updateResearchSessionMessages derives title and latest result from message
   assert.equal(updatedSession.title, 'Deep research source quality roadmap');
   assert.equal(updatedSession.latestResult?.report, '# 做研究报告');
   assert.equal(updatedSession.updatedAt, '2026-05-16T10:01:00.000Z');
+});
+
+test('updateResearchSessionMessages keeps latest report artifact when a follow-up answer is appended', () => {
+  const session = createResearchSession({
+    id: 'session-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+  const messages = [
+    createUserMessage('Deep research source quality roadmap'),
+    createAssistantResultMessage(completedResult),
+    createUserMessage('来源是？'),
+    createAssistantResultMessage(answerResult),
+  ];
+
+  const updatedSession = updateResearchSessionMessages(session, messages, '2026-05-16T10:02:00.000Z');
+
+  assert.equal(updatedSession.latestResult?.report, '# 做研究报告');
 });
 
 test('upsertResearchSession keeps sessions sorted by recent activity', () => {

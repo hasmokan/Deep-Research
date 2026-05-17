@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   appendResearchActivityStatus,
+  appendResearchActivityDocuments,
   applyResearchRunToActivityMessage,
   buildResearchRequestMessages,
   createAssistantResultMessage,
@@ -13,11 +14,35 @@ import {
   stopRunningResearchActivityMessage,
 } from './conversation.ts';
 
+const researchPlan = {
+  query: '做研究',
+  sourceLabel: 'Public web',
+  summary: 'Research 做研究 across public sources.',
+  shouldPlan: true,
+  steps: [
+    {
+      id: 'scope',
+      title: 'Clarify scope',
+      detail: 'Define the research question.',
+    },
+  ],
+};
+
 const completedResult = {
   query: '做研究',
   documents: [],
   analysis: 'Research work is iterative and requires focused questions.',
   report: '# 做研究报告\n\n研究需要不断阅读、反思，并逐步收敛问题。',
+  status: 'completed',
+};
+
+const sourceAnswerResult = {
+  query: '来源是？',
+  documents: [],
+  analysis: null,
+  report: null,
+  answer: '上一份报告使用了这些来源：\n1. [报告](https://example.com/report)',
+  result_type: 'answer' as const,
   status: 'completed',
 };
 
@@ -75,6 +100,33 @@ test('assistant research activity messages keep stream status for session restor
   assert.equal(updatedMessage.researchActivity?.updatedAt, '2026-05-16T10:01:00.000Z');
 });
 
+test('assistant research activity messages keep streamed source documents', () => {
+  const activityMessage = createAssistantResearchActivityMessage('青稞市场占有率', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const updatedMessage = appendResearchActivityDocuments(
+    activityMessage,
+    [
+      {
+        id: 1,
+        content: '**青稞报告**\n\n市场占有率信息。',
+        metadata: {
+          title: '青稞报告',
+          url: 'https://example.com/source',
+        },
+        similarity: 1,
+      },
+    ],
+    '2026-05-16T10:01:00.000Z',
+  );
+
+  assert.equal(updatedMessage.researchActivity?.streamDocuments.length, 1);
+  assert.equal(updatedMessage.researchActivity?.streamDocuments[0]?.metadata.title, '青稞报告');
+  assert.equal(updatedMessage.researchActivity?.updatedAt, '2026-05-16T10:01:00.000Z');
+});
+
 test('research activity stores backend run id for later restoration', () => {
   const activityMessage = createAssistantResearchActivityMessage('青稞市场占有率', {
     id: 'assistant-activity-1',
@@ -124,9 +176,24 @@ test('applyResearchRunToActivityMessage rebuilds activity trace and completed re
       },
       {
         run_id: 'run-123',
+        event: 'documents',
+        data: {
+          documents: [
+            {
+              id: 1,
+              content: '**青稞报告**',
+              metadata: { title: '青稞报告' },
+            },
+          ],
+        },
+        seq: 3,
+        created_at: '2026-05-16T10:00:02.000Z',
+      },
+      {
+        run_id: 'run-123',
         event: 'complete',
         data: completedResult,
-        seq: 3,
+        seq: 4,
         created_at: '2026-05-16T10:02:00.000Z',
       },
     ],
@@ -134,6 +201,7 @@ test('applyResearchRunToActivityMessage rebuilds activity trace and completed re
 
   assert.equal(restoredMessage.researchActivity?.runId, 'run-123');
   assert.equal(restoredMessage.researchActivity?.streamStatuses.length, 1);
+  assert.equal(restoredMessage.researchActivity?.streamDocuments.length, 1);
   assert.equal(restoredMessage.researchActivity?.status, 'completed');
   assert.equal(restoredMessage.result?.report, completedResult.report);
 });
@@ -143,6 +211,7 @@ test('completed research activity keeps trace and becomes result history', () =>
     createAssistantResearchActivityMessage('做研究', {
       id: 'assistant-activity-1',
       now: '2026-05-16T10:00:00.000Z',
+      plan: researchPlan,
     }),
     {
       stage: 'report',
@@ -163,9 +232,32 @@ test('completed research activity keeps trace and becomes result history', () =>
   ]);
 
   assert.equal(completedMessage.result?.report, completedResult.report);
+  assert.equal(completedMessage.researchPlan?.summary, researchPlan.summary);
   assert.equal(completedMessage.researchActivity?.status, 'completed');
   assert.equal(completedMessage.researchActivity?.streamStatuses.length, 1);
   assert.match(history[1].content, /Research report for "做研究"/);
+});
+
+test('artifact follow-up answers become inline assistant messages without research trace', () => {
+  const activityMessage = createAssistantResearchActivityMessage('来源是？', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const completedMessage = completeResearchActivityMessage(
+    activityMessage,
+    sourceAnswerResult,
+    '2026-05-16T10:02:00.000Z',
+  );
+  const history = buildResearchRequestMessages([
+    createUserMessage('来源是？'),
+    completedMessage,
+  ]);
+
+  assert.equal(completedMessage.result?.result_type, 'answer');
+  assert.equal(completedMessage.researchActivity, undefined);
+  assert.match(completedMessage.content, /https:\/\/example.com\/report/);
+  assert.match(history[1].content, /上一份报告使用了这些来源/);
 });
 
 test('buildResearchRequestMessages skips activity-only assistant messages', () => {

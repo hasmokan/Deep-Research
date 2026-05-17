@@ -81,9 +81,10 @@ class ConversationResearchRouteTests(TestCase):
         from agents.research_stream import format_sse_event
         from routers import research
 
-        async def fake_stream(query, run_id=None, display_query=None, store=None):
+        async def fake_stream(query, run_id=None, display_query=None, store=None, latest_result=None):
             self.assertIn("Previous conversation context:", query)
             self.assertEqual(display_query, "展开第三点")
+            self.assertIsNone(latest_result)
             yield format_sse_event("complete", {"query": display_query, "status": "completed"})
 
         client = TestClient(app)

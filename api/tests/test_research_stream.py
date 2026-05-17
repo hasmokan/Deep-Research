@@ -1,5 +1,7 @@
 """SSE stream behavior for research execution."""
 
+import asyncio
+import json
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -18,6 +20,59 @@ class ResearchStreamTests(TestCase):
             event,
             'event: status\ndata: {"stage":"search","message":"Searching"}\n\n',
         )
+
+    def test_stream_emits_trace_events_for_tool_call_and_sources(self):
+        from agents import research_stream
+
+        async def fake_web_search_node(state):
+            return {
+                "documents": [
+                    {
+                        "id": "web_0",
+                        "content": "**Example Source**\n\nUseful source text.",
+                        "metadata": {
+                            "title": "Example Source",
+                            "url": "https://example.com/source",
+                            "source": "example.com",
+                            "provider": "duckduckgo",
+                            "type": "web_search",
+                        },
+                        "similarity": 1.0,
+                    }
+                ],
+                "web_search_completed": True,
+            }
+
+        async def fake_analyze_node(state):
+            return {
+                "analysis": "The source is useful.",
+                "analysis_completed": True,
+            }
+
+        async def fake_generate_node(state):
+            return {
+                "report": "# Report\n\nThe source is useful.",
+                "report_completed": True,
+            }
+
+        with (
+            patch.object(research_stream, "web_search_node", fake_web_search_node),
+            patch.object(research_stream, "analyze_node", fake_analyze_node),
+            patch.object(research_stream, "generate_node", fake_generate_node),
+        ):
+            events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
+
+        trace_payloads = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: trace")
+        ]
+
+        self.assertEqual(trace_payloads[0]["kind"], "tool_call")
+        self.assertEqual(trace_payloads[0]["title"], "Search web")
+        self.assertEqual(trace_payloads[1]["kind"], "tool_result")
+        self.assertEqual(trace_payloads[1]["documents"][0]["title"], "Example Source")
+        self.assertEqual(trace_payloads[1]["documents"][0]["url"], "https://example.com/source")
 
     def test_stream_route_returns_text_event_stream(self):
         from agents.research_stream import format_sse_event
@@ -91,3 +146,7 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["run_id"], "run-test")
         self.assertEqual(response.json()["events"][1]["event"], "complete")
+
+
+async def _collect_stream_events(stream):
+    return [event async for event in stream]

@@ -10,10 +10,14 @@ import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { ChatSidebar } from '@/components/layouts/chat-sidebar';
 import { ErrorState, LoadingState, ReportSidebar, ResultsDisplay, SearchForm } from '@/components/research';
+import { MarkdownContent } from '@/components/research/markdown-content';
 import { ResearchPlanPanel } from '@/components/research/research-plan-panel';
 import { apiClient } from '@/lib/api';
+import type { ResearchResult } from '@/lib/api/types';
 import {
   appendResearchActivityStatus,
+  appendResearchActivityDocuments,
+  appendResearchActivityTrace,
   appendResearchActivityThinking,
   applyResearchRunToActivityMessage,
   buildResearchRequestMessages,
@@ -25,7 +29,12 @@ import {
   type ConversationMessage,
   updateResearchActivityMessageStatus,
 } from '@/lib/research/conversation';
-import { createResearchPlan, normalizeResearchPlan, type ResearchPlan } from '@/lib/research/research-workflow';
+import {
+  createResearchPlan,
+  getResearchQueryOverride,
+  normalizeResearchPlan,
+  type ResearchPlan,
+} from '@/lib/research/research-workflow';
 import {
   createResearchSession,
   createResearchSessionFromServerThread,
@@ -47,9 +56,49 @@ function UserBubble({ content }: { content: string }) {
   );
 }
 
+function isReportResult(result: ResearchResult | null | undefined): result is ResearchResult {
+  return Boolean(result && result.result_type !== 'answer');
+}
+
+function getLatestArtifactResult(messages: ConversationMessage[]) {
+  return [...messages]
+    .reverse()
+    .find((message) => isReportResult(message.result))
+    ?.result ?? null;
+}
+
 function AssistantResultMessage({ message }: { message: ConversationMessage }) {
-  if (!message.result && !message.researchActivity) {
+  if (!message.result && !message.researchActivity && !message.researchPlan) {
     return null;
+  }
+
+  if (message.researchPlan) {
+    return (
+      <div className="mx-auto max-w-[820px]">
+        <ResearchPlanPanel
+          plan={message.researchPlan}
+          activity={message.researchActivity}
+        />
+      </div>
+    );
+  }
+
+  if (message.result?.result_type === 'answer') {
+    return (
+      <div className="mx-auto w-full max-w-[760px]">
+        <div className="flex gap-4">
+          <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+            <CheckCircle2 className="h-4 w-4" />
+          </div>
+          <article className="min-w-0 flex-1">
+            <MarkdownContent
+              content={message.result.answer || message.result.report || message.content}
+              className="text-base leading-7"
+            />
+          </article>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -114,14 +163,17 @@ export default function Home() {
     resetStream,
     addStreamStatus,
     addStreamThinking,
+    setStreamDocuments,
+    addStreamTrace,
   } = useResearchStore();
 
   const currentQuery = localQuery.trim();
   const activePlan = researchPlan;
-  const latestCompletedResult = [...messages].reverse().find((message) => message.result)?.result ?? null;
-  const sidebarResult = result || latestCompletedResult;
+  const latestArtifactResult = getLatestArtifactResult(messages);
+  const latestContextResult = (isReportResult(result) ? result : null) || latestArtifactResult;
+  const sidebarResult = latestContextResult;
   const hasConversation = Boolean(messages.length || activePlan || isPlanning || isLoading || error);
-  const canSendFollowUp = Boolean(latestCompletedResult || result);
+  const canSendFollowUp = Boolean(latestContextResult);
   const activePlanActivityMessage = activePlan
     ? [...messages].reverse().find((message) => (
         message.researchActivity?.query === activePlan.query
@@ -419,6 +471,7 @@ export default function Home() {
 
     const requestedQuery = currentQuery;
     const history = buildResearchRequestMessages(messagesRef.current);
+    const latestResultForFollowUp = getLatestArtifactResult(messagesRef.current) ?? (isReportResult(result) ? result : null);
     const userMessage = createUserMessage(requestedQuery);
     const nextMessages = [...messagesRef.current, userMessage];
 
@@ -436,6 +489,7 @@ export default function Home() {
         query: requestedQuery,
         thread_id: activeSessionIdRef.current ?? undefined,
         messages: history,
+        latest_result: latestResultForFollowUp,
       });
       const normalizedPlan = normalizeResearchPlan(generatedPlan);
 
@@ -458,10 +512,11 @@ export default function Home() {
   };
 
   const handleStartResearch = async (
-    queryOverride?: string,
+    queryOverride?: unknown,
     options: { skipPlan?: boolean; appendUserMessage?: boolean } = {},
   ) => {
-    const researchQuery = queryOverride?.trim() || activePlan?.query || query || currentQuery;
+    const normalizedQueryOverride = getResearchQueryOverride(queryOverride);
+    const researchQuery = normalizedQueryOverride || activePlan?.query || query || currentQuery;
 
     if (!researchQuery) {
       setError('Please enter a research query');
@@ -476,11 +531,14 @@ export default function Home() {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const history = buildResearchRequestMessages(messagesRef.current);
-    const shouldAppendUserMessage = options.appendUserMessage ?? Boolean(queryOverride?.trim());
-    const userMessage = shouldAppendUserMessage && queryOverride?.trim()
-      ? createUserMessage(queryOverride)
+    const latestResultForFollowUp = getLatestArtifactResult(messagesRef.current) ?? (isReportResult(result) ? result : null);
+    const shouldAppendUserMessage = options.appendUserMessage ?? Boolean(normalizedQueryOverride);
+    const userMessage = shouldAppendUserMessage && normalizedQueryOverride
+      ? createUserMessage(normalizedQueryOverride)
       : null;
-    const activityMessage = createAssistantResearchActivityMessage(researchQuery);
+    const activityMessage = createAssistantResearchActivityMessage(researchQuery, {
+      plan: options.skipPlan ? undefined : activePlan ?? undefined,
+    });
     const startingMessages = userMessage
       ? [...messagesRef.current, userMessage, activityMessage]
       : [...messagesRef.current, activityMessage];
@@ -501,7 +559,7 @@ export default function Home() {
 
     try {
       setQuery(researchQuery);
-      if (queryOverride?.trim()) {
+      if (normalizedQueryOverride) {
         setLocalQuery('');
       }
       if (options.skipPlan) {
@@ -517,6 +575,7 @@ export default function Home() {
             query: researchQuery,
             thread_id: runSessionId,
             messages: history,
+            latest_result: latestResultForFollowUp,
         },
         {
           onMetadata: (metadata) => {
@@ -532,6 +591,22 @@ export default function Home() {
               runSessionId,
               activityMessage.id,
               (message) => appendResearchActivityStatus(message, status),
+            );
+          },
+          onTrace: (trace) => {
+            addStreamTrace(trace);
+            updateResearchActivityMessage(
+              runSessionId,
+              activityMessage.id,
+              (message) => appendResearchActivityTrace(message, trace),
+            );
+          },
+          onDocuments: (documents) => {
+            setStreamDocuments(documents);
+            updateResearchActivityMessage(
+              runSessionId,
+              activityMessage.id,
+              (message) => appendResearchActivityDocuments(message, documents),
             );
           },
           onThinking: (thinking) => {
@@ -552,6 +627,7 @@ export default function Home() {
           query: researchQuery,
           thread_id: runSessionId,
           messages: history,
+          latest_result: latestResultForFollowUp,
         });
       });
 
@@ -694,7 +770,9 @@ export default function Home() {
                       isLoading={isLoading}
                       onEdit={handleEditPlan}
                       onCancel={handleCancelPlan}
-                      onStart={handleStartResearch}
+                      onStart={() => {
+                        void handleStartResearch();
+                      }}
                     />
                   </div>
                 )}

@@ -17,6 +17,10 @@ class ResearchRequest(BaseModel):
         default_factory=list,
         description="Prior conversation messages used to resolve follow-up research requests",
     )
+    latest_result: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Most recent completed research artifact for source/report-aware follow-ups",
+    )
 
     class Config:
         json_schema_extra = {
@@ -24,6 +28,7 @@ class ResearchRequest(BaseModel):
                 "query": "Latest trends in artificial intelligence research",
                 "thread_id": None,
                 "messages": [],
+                "latest_result": None,
             }
         }
 

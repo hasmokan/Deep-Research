@@ -93,6 +93,44 @@ class ResearchPlanRouteTests(TestCase):
         self.assertEqual(response.json()["steps"], [])
         generate_plan.assert_not_called()
 
+    def test_plan_endpoint_forces_plan_for_first_turn_deep_research(self):
+        client = TestClient(app)
+        generated_plan = {
+            "query": "调查一下青稞市场占用份额",
+            "source_label": "Public web",
+            "summary": "Research Qingke market share across public sources.",
+            "steps": [
+                {"id": "scope", "title": "Define the market", "detail": "Clarify the market and competitors."},
+                {"id": "sources", "title": "Find market sources", "detail": "Collect public market share evidence."},
+                {"id": "compare", "title": "Compare evidence", "detail": "Check consistency across sources."},
+                {"id": "report", "title": "Draft report", "detail": "Summarize market share findings."},
+            ],
+        }
+
+        async def fake_generate_research_plan(query: str):
+            self.assertEqual(query, "调查一下青稞市场占用份额")
+            return generated_plan
+
+        with (
+            patch(
+                "routers.research.assess_research_plan_need",
+                return_value={"should_plan": False, "reason": "Incorrectly skipped."},
+            ) as assess_plan_need,
+            patch(
+                "routers.research.generate_research_plan",
+                side_effect=fake_generate_research_plan,
+            ),
+        ):
+            response = client.post(
+                "/api/research/plan",
+                json={"query": "调查一下青稞市场占用份额"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["should_plan"])
+        self.assertEqual(response.json()["steps"][0]["title"], "Define the market")
+        assess_plan_need.assert_not_called()
+
 
 class ResearchPlanGenerationTests(IsolatedAsyncioTestCase):
     def test_plan_prompt_only_requires_query_variable(self):

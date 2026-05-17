@@ -1,7 +1,10 @@
 import type {
+  Document,
   ResearchPlanResponse,
   ResearchStreamStatus,
   ResearchStreamThinking,
+  ResearchStreamTrace,
+  ResearchStreamTraceDocument,
 } from '@/lib/api/types';
 
 export interface ResearchPlanStep {
@@ -29,10 +32,24 @@ export interface ResearchSubmitDecisionInput {
 
 export interface ResearchActivityEvent {
   id: string;
-  stage: ResearchStreamStatus['stage'] | ResearchStreamThinking['stage'];
-  kind: 'status' | 'thinking';
+  stage: ResearchStreamStatus['stage'] | ResearchStreamThinking['stage'] | ResearchStreamTrace['stage'];
+  kind: 'status' | 'thinking' | 'sources' | ResearchStreamTrace['kind'];
   title: string;
   detail: string;
+  documents?: Array<Document | ResearchStreamTraceDocument>;
+}
+
+export interface ResearchActivityStream {
+  visibleEvents: ResearchActivityEvent[];
+  hiddenEvents: ResearchActivityEvent[];
+  hiddenCount: number;
+  toggleLabel: 'More steps' | 'Less steps';
+}
+
+const DEFAULT_VISIBLE_AGENT_EVENTS = 2;
+
+export function getResearchQueryOverride(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 export function createResearchPlan(query: string): ResearchPlan {
@@ -112,21 +129,91 @@ export function getResearchSubmitAction({
 export function buildResearchActivity(
   statuses: ResearchStreamStatus[],
   thinking: ResearchStreamThinking[],
+  documents: Document[] = [],
+  trace: ResearchStreamTrace[] = [],
 ): ResearchActivityEvent[] {
-  return [
-    ...statuses.map((status, index) => ({
+  if (trace.length > 0) {
+    return trace.map((event) => ({
+      id: event.id,
+      stage: event.stage,
+      kind: event.kind,
+      title: event.title,
+      detail: event.detail,
+      documents: event.documents,
+    }));
+  }
+
+  const events: ResearchActivityEvent[] = [];
+  let insertedDocuments = false;
+
+  statuses.forEach((status, index) => {
+    events.push({
       id: `status-${index}-${status.stage}`,
       stage: status.stage,
       kind: 'status' as const,
       title: status.label,
       detail: status.message,
-    })),
-    ...thinking.map((message, index) => ({
+    });
+
+    if (!insertedDocuments && status.stage === 'search' && documents.length > 0) {
+      insertedDocuments = true;
+      events.push({
+        id: 'documents-found',
+        stage: 'search',
+        kind: 'sources',
+        title: 'Sources found',
+        detail: `Found ${documents.length} source candidates from the web search.`,
+        documents,
+      });
+    }
+  });
+
+  if (!insertedDocuments && documents.length > 0) {
+    events.push({
+      id: 'documents-found',
+      stage: 'search',
+      kind: 'sources',
+      title: 'Sources found',
+      detail: `Found ${documents.length} source candidates from the web search.`,
+      documents,
+    });
+  }
+
+  thinking.forEach((message, index) => {
+    events.push({
       id: `thinking-${index}-${message.stage}`,
       stage: message.stage,
       kind: 'thinking' as const,
       title: message.label,
       detail: message.text,
-    })),
-  ];
+    });
+  });
+
+  return events;
+}
+
+export function buildResearchActivityStream(
+  events: ResearchActivityEvent[],
+  showOlderSteps: boolean,
+  visibleCount: number = DEFAULT_VISIBLE_AGENT_EVENTS,
+): ResearchActivityStream {
+  const safeVisibleCount = Math.max(1, visibleCount);
+
+  if (events.length <= safeVisibleCount) {
+    return {
+      visibleEvents: events,
+      hiddenEvents: [],
+      hiddenCount: 0,
+      toggleLabel: showOlderSteps ? 'Less steps' : 'More steps',
+    };
+  }
+
+  const hiddenEvents = events.slice(0, -safeVisibleCount);
+
+  return {
+    visibleEvents: showOlderSteps ? events : events.slice(-safeVisibleCount),
+    hiddenEvents,
+    hiddenCount: hiddenEvents.length,
+    toggleLabel: showOlderSteps ? 'Less steps' : 'More steps',
+  };
 }

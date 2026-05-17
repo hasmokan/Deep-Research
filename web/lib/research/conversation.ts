@@ -1,11 +1,14 @@
 import type {
+  Document,
   ResearchRequestMessage,
   ResearchResult,
   ResearchRun,
   ResearchRunEvent,
   ResearchStreamStatus,
   ResearchStreamThinking,
+  ResearchStreamTrace,
 } from '@/lib/api/types';
+import type { ResearchPlan } from './research-workflow';
 
 export type ConversationRole = 'user' | 'assistant';
 export type ResearchActivityStatus = 'running' | 'completed' | 'failed' | 'stopped';
@@ -16,6 +19,8 @@ export interface ConversationResearchActivity {
   status: ResearchActivityStatus;
   streamStatuses: ResearchStreamStatus[];
   streamThinking: ResearchStreamThinking[];
+  streamDocuments: Document[];
+  streamTrace: ResearchStreamTrace[];
   startedAt: string;
   updatedAt: string;
 }
@@ -27,6 +32,7 @@ export interface ConversationMessage {
   createdAt: string;
   result?: ResearchResult;
   researchActivity?: ConversationResearchActivity;
+  researchPlan?: ResearchPlan;
 }
 
 interface BuildHistoryOptions {
@@ -37,6 +43,7 @@ interface BuildHistoryOptions {
 interface CreateAssistantResearchActivityMessageOptions {
   id?: string;
   now?: string;
+  plan?: ResearchPlan;
 }
 
 const DEFAULT_MAX_MESSAGES = 8;
@@ -65,6 +72,10 @@ function truncateContent(content: string, maxLength: number) {
 }
 
 function getAssistantResultContent(result: ResearchResult) {
+  if (result.result_type === 'answer') {
+    return result.answer || result.report || result.analysis || 'No answer text was returned.';
+  }
+
   const report = result.report || result.analysis || 'No report text was returned.';
 
   return [
@@ -97,6 +108,33 @@ function isResearchStreamThinking(value: unknown): value is ResearchStreamThinki
     (thinking.stage === 'analyze' || thinking.stage === 'report') &&
     typeof thinking.label === 'string' &&
     typeof thinking.text === 'string'
+  );
+}
+
+function isResearchDocumentArray(value: unknown): value is Document[] {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+
+  return value.every((document) => (
+    document &&
+    typeof document === 'object' &&
+    'content' in document &&
+    'metadata' in document
+  ));
+}
+
+function isResearchStreamTrace(value: unknown): value is ResearchStreamTrace {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const trace = value as ResearchStreamTrace;
+  return (
+    (trace.stage === 'search' || trace.stage === 'analyze' || trace.stage === 'report') &&
+    typeof trace.kind === 'string' &&
+    typeof trace.title === 'string' &&
+    typeof trace.detail === 'string'
   );
 }
 
@@ -135,10 +173,14 @@ export function createUserMessage(content: string): ConversationMessage {
 }
 
 export function createAssistantResultMessage(result: ResearchResult): ConversationMessage {
+  const isAnswer = result.result_type === 'answer';
+
   return {
     id: createMessageId('assistant'),
     role: 'assistant',
-    content: `Research report generated for "${result.query}".`,
+    content: isAnswer
+      ? result.answer || `Answered from the previous report for "${result.query}".`
+      : `Research report generated for "${result.query}".`,
     createdAt: new Date().toISOString(),
     result,
   };
@@ -156,11 +198,14 @@ export function createAssistantResearchActivityMessage(
     role: 'assistant',
     content: `Researching "${normalizedQuery}".`,
     createdAt: timestamp,
+    researchPlan: options.plan,
     researchActivity: {
       query: normalizedQuery,
       status: 'running',
       streamStatuses: [],
       streamThinking: [],
+      streamDocuments: [],
+      streamTrace: [],
       startedAt: timestamp,
       updatedAt: timestamp,
     },
@@ -226,16 +271,67 @@ export function appendResearchActivityThinking(
   };
 }
 
+export function appendResearchActivityDocuments(
+  message: ConversationMessage,
+  documents: Document[],
+  now: string = getNow(),
+): ConversationMessage {
+  if (!message.researchActivity) {
+    return message;
+  }
+
+  return {
+    ...message,
+    researchActivity: {
+      ...message.researchActivity,
+      status: 'running',
+      streamDocuments: documents,
+      updatedAt: now,
+    },
+  };
+}
+
+export function appendResearchActivityTrace(
+  message: ConversationMessage,
+  trace: ResearchStreamTrace,
+  now: string = getNow(),
+): ConversationMessage {
+  if (!message.researchActivity) {
+    return message;
+  }
+
+  return {
+    ...message,
+    researchActivity: {
+      ...message.researchActivity,
+      status: 'running',
+      streamTrace: [...message.researchActivity.streamTrace, trace],
+      updatedAt: now,
+    },
+  };
+}
+
 export function completeResearchActivityMessage(
   message: ConversationMessage,
   result: ResearchResult,
   now: string = getNow(),
 ): ConversationMessage {
+  const isAnswer = result.result_type === 'answer';
+
   if (!message.researchActivity) {
     return {
       ...createAssistantResultMessage(result),
       id: message.id,
       createdAt: message.createdAt,
+    };
+  }
+
+  if (isAnswer) {
+    return {
+      ...message,
+      content: result.answer || `Answered from the previous report for "${result.query}".`,
+      result,
+      researchActivity: undefined,
     };
   }
 
@@ -297,6 +393,8 @@ export function applyResearchRunToActivityMessage(
       runId: run.run_id,
       streamStatuses: [],
       streamThinking: [],
+      streamDocuments: [],
+      streamTrace: [],
       updatedAt: runUpdatedAt,
     },
   };
@@ -324,8 +422,16 @@ function applyResearchRunEvent(
     return appendResearchActivityStatus(message, event.data, updatedAt);
   }
 
+  if (event.event === 'trace' && isResearchStreamTrace(event.data)) {
+    return appendResearchActivityTrace(message, event.data, updatedAt);
+  }
+
   if (event.event === 'thinking' && isResearchStreamThinking(event.data)) {
     return appendResearchActivityThinking(message, event.data, updatedAt);
+  }
+
+  if (event.event === 'documents' && isResearchDocumentArray(event.data.documents)) {
+    return appendResearchActivityDocuments(message, event.data.documents, updatedAt);
   }
 
   if (event.event === 'complete' && isResearchResult(event.data)) {

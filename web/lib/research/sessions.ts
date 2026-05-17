@@ -62,7 +62,10 @@ function getSessionTitle(messages: ConversationMessage[]) {
 }
 
 function getLatestResult(messages: ConversationMessage[]) {
-  return [...messages].reverse().find((message) => message.result)?.result ?? null;
+  return [...messages]
+    .reverse()
+    .find((message) => message.result && message.result.result_type !== 'answer')
+    ?.result ?? null;
 }
 
 function sortSessionsByActivity(sessions: ResearchSession[]) {

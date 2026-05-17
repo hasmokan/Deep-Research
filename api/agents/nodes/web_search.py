@@ -1,6 +1,8 @@
 """Web search node - Search the internet for relevant information"""
 
-from typing import Any, List, Dict
+from typing import Any
+from urllib.parse import urlparse
+
 from services.web_search import get_web_search_service
 
 
@@ -35,13 +37,18 @@ async def web_search_node(state: dict[str, Any]) -> dict[str, Any]:
     # Convert to document format for consistency with vector search
     documents = []
     for i, result in enumerate(all_results):
+        url = result.get("url", "")
+        title = result.get("title", "")
+        source = _source_label(url, result.get("source", ""))
         documents.append({
             "id": f"web_{i}",
-            "content": f"**{result.get('title', '')}**\n\n{result.get('content', '')}",
+            "content": f"**{title}**\n\n{result.get('content', '')}",
             "metadata": {
-                "url": result.get("url", ""),
-                "source": result.get("source", "web"),
-                "type": result.get("type", "web_search")
+                "title": title,
+                "url": url,
+                "source": source,
+                "provider": result.get("provider", "duckduckgo"),
+                "type": result.get("type", "web_search"),
             },
             "similarity": 1.0  # Web results are considered relevant
         })
@@ -50,3 +57,13 @@ async def web_search_node(state: dict[str, Any]) -> dict[str, Any]:
         "documents": documents,
         "web_search_completed": True
     }
+
+
+def _source_label(url: str, fallback: str) -> str:
+    hostname = urlparse(url).hostname or ""
+    normalized_hostname = hostname.removeprefix("www.")
+
+    if normalized_hostname:
+        return normalized_hostname
+
+    return fallback or "web"

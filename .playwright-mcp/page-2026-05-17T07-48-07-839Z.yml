@@ -1,0 +1,65 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - heading "deepresearch" [level=1] [ref=e5]
+        - button "Collapse sidebar" [ref=e6]:
+          - img
+      - navigation [ref=e7]:
+        - button "New chat" [ref=e8]:
+          - img
+          - text: New chat
+        - button "Search chats" [ref=e9]:
+          - img
+          - text: Search chats
+        - button "Projects" [ref=e10]:
+          - img
+          - text: Projects
+        - button "Codex" [ref=e11]:
+          - img
+          - text: Codex
+        - button "More" [ref=e12]:
+          - img
+          - text: More
+      - generic [ref=e13]:
+        - paragraph [ref=e14]: Recents
+        - paragraph [ref=e16]: No chats yet
+    - main [ref=e17]:
+      - generic [ref=e19]:
+        - button "Share" [ref=e20]:
+          - img
+          - text: Share
+        - button "Toggle theme" [ref=e21]:
+          - img
+          - generic [ref=e22]: Toggle theme
+        - button "More actions" [ref=e23]:
+          - img
+      - generic [ref=e27]:
+        - img [ref=e29]
+        - heading "What should we research?" [level=1] [ref=e32]
+        - paragraph [ref=e33]: Ask for a detailed report, review the plan, then start a live deep research run.
+      - generic:
+        - generic [ref=e34]:
+          - textbox "Get a detailed report" [ref=e35]
+          - generic [ref=e36]:
+            - generic [ref=e37]:
+              - button "Add attachment" [ref=e38]:
+                - img
+              - button "Deep research" [pressed] [ref=e39]:
+                - img
+                - text: Deep research
+              - button "Apps" [ref=e40]:
+                - img
+                - text: Apps
+              - button "Sites" [ref=e41]:
+                - img
+                - text: Sites
+            - generic [ref=e42]:
+              - button "Pro" [ref=e43]
+              - button "Voice input" [ref=e44]:
+                - img
+              - button "Create plan" [disabled]:
+                - img
+        - paragraph: deepresearch can make mistakes. Check important info.
+  - button "Open Next.js Dev Tools" [ref=e50] [cursor=pointer]:
+    - img [ref=e51]

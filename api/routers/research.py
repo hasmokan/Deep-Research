@@ -29,16 +29,19 @@ async def create_research_plan(request: ResearchRequest):
         )
 
     try:
-        plan_need = await assess_research_plan_need(request.query)
+        has_follow_up_context = bool(request.messages) or bool(request.latest_result)
 
-        if not plan_need["should_plan"]:
-            return ResearchPlanResponse(
-                query=request.query,
-                source_label="Conversation",
-                summary=plan_need.get("reason") or "This follow-up can be answered directly.",
-                steps=[],
-                should_plan=False,
-            )
+        if has_follow_up_context:
+            plan_need = await assess_research_plan_need(request.query)
+
+            if not plan_need["should_plan"]:
+                return ResearchPlanResponse(
+                    query=request.query,
+                    source_label="Conversation",
+                    summary=plan_need.get("reason") or "This follow-up can be answered directly.",
+                    steps=[],
+                    should_plan=False,
+                )
 
         contextual_query = build_contextual_research_query(request.query, request.messages)
         plan = await generate_research_plan(contextual_query)
@@ -96,6 +99,7 @@ async def stream_research_post(request: ResearchRequest):
             run_id=run["run_id"],
             display_query=request.query,
             store=research_run_store,
+            latest_result=request.latest_result,
         ):
             yield event
 
@@ -180,6 +184,10 @@ async def create_research(request: ResearchRequest):
             "analysis_thinking": None,
             "report": None,
             "report_thinking": None,
+            "latest_result": request.latest_result,
+            "intent": None,
+            "answer": None,
+            "result_type": "report",
             "web_search_completed": False,
             "analysis_completed": False,
             "report_completed": False
@@ -225,6 +233,10 @@ async def execute_research(request: ResearchRequest):
             "analysis_thinking": None,
             "report": None,
             "report_thinking": None,
+            "latest_result": request.latest_result,
+            "intent": None,
+            "answer": None,
+            "result_type": "report",
             "web_search_completed": False,
             "analysis_completed": False,
             "report_completed": False
@@ -241,6 +253,8 @@ async def execute_research(request: ResearchRequest):
             "analysis_thinking": result.get("analysis_thinking"),
             "report": result.get("report"),
             "report_thinking": result.get("report_thinking"),
+            "answer": result.get("answer"),
+            "result_type": result.get("result_type") or "report",
             "status": "completed" if result.get("report_completed") else "failed"
         }
 

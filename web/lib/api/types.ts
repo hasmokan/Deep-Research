@@ -6,6 +6,7 @@ export interface ResearchRequest {
   query: string;
   thread_id?: string;
   messages?: ResearchRequestMessage[];
+  latest_result?: ResearchResult | null;
 }
 
 export interface ResearchRequestMessage {
@@ -42,6 +43,8 @@ export interface ResearchResult {
   analysis_thinking?: string | null;
   report: string | null;
   report_thinking?: string | null;
+  answer?: string | null;
+  result_type?: 'report' | 'answer';
   status: string;
 }
 
@@ -91,13 +94,35 @@ export interface ResearchStreamThinking {
   text: string;
 }
 
+export interface ResearchStreamTraceDocument {
+  id?: string | number | null;
+  title?: string | null;
+  url?: string | null;
+  source?: string | null;
+  provider?: string | null;
+  type?: string | null;
+}
+
+export interface ResearchStreamTrace {
+  id: string;
+  stage: 'search' | 'analyze' | 'report';
+  kind: 'tool_call' | 'tool_result' | 'reasoning';
+  title: string;
+  detail: string;
+  tool?: string;
+  query?: string;
+  documents?: ResearchStreamTraceDocument[];
+}
+
 export interface ResearchStreamHandlers {
   onMetadata?: (metadata: ResearchStreamMetadata) => void;
   onStatus?: (status: ResearchStreamStatus) => void;
+  onTrace?: (trace: ResearchStreamTrace) => void;
   onDocuments?: (documents: Document[]) => void;
   onThinking?: (thinking: ResearchStreamThinking) => void;
   onAnalysis?: (analysis: string | null) => void;
   onReport?: (report: string | null) => void;
+  onAnswer?: (answer: string | null) => void;
   signal?: AbortSignal;
 }
 
