@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 
 from agents.nodes.reasoning import extract_response_parts
 from core.config import get_settings
+from services.langfuse_observability import ainvoke_langchain, get_langfuse_tracer
 
 settings = get_settings()
 
@@ -31,7 +32,9 @@ async def generate_research_plan(query: str) -> dict[str, Any]:
     prompt = _build_research_plan_prompt()
 
     chain = prompt | llm
-    response = await chain.ainvoke({"query": normalized_query})
+    payload = {"query": normalized_query}
+    config = _langchain_config("research-plan-llm", "plan")
+    response = await ainvoke_langchain(chain, payload, config)
     content, _thinking = extract_response_parts(response)
     payload = _parse_json_payload(content)
 
@@ -51,7 +54,9 @@ async def assess_research_plan_need(query: str) -> dict[str, Any]:
 
     prompt = _build_plan_need_prompt()
     chain = prompt | llm
-    response = await chain.ainvoke({"query": normalized_query})
+    payload = {"query": normalized_query}
+    config = _langchain_config("plan-need-llm", "plan")
+    response = await ainvoke_langchain(chain, payload, config)
     content, _thinking = extract_response_parts(response)
     payload = _parse_json_payload(content)
 
@@ -187,3 +192,13 @@ def _normalize_plan_need_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _slugify_step_id(value: str, index: int) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or f"step-{index}"
+
+
+def _langchain_config(run_name: str, stage: str) -> dict[str, Any]:
+    return get_langfuse_tracer().langchain_config(
+        run_name,
+        metadata={
+            "feature": "research-plan",
+            "stage": stage,
+        },
+    )

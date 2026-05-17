@@ -6,6 +6,7 @@ from typing import Optional
 class Settings(BaseSettings):
     supabase_url: str
     supabase_key: str
+    supabase_service_key: Optional[str] = None
     openai_api_key: str
     openai_base_url: Optional[str] = None
     llm_model: str = "minimax/minimax-m2.7"
@@ -22,6 +23,16 @@ class Settings(BaseSettings):
 
     # API configuration
     frontend_url: str = "http://localhost:3000"
+    research_storage_backend: str = "json"
+
+    # Langfuse observability
+    langfuse_enabled: bool = False
+    langfuse_public_key: Optional[str] = None
+    langfuse_secret_key: Optional[str] = None
+    langfuse_base_url: Optional[str] = None
+    langfuse_environment: str = "development"
+    langfuse_release: Optional[str] = None
+    langfuse_sample_rate: float = 1.0
 
     class Config:
         env_file = ".env"

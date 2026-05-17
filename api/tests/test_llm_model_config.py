@@ -163,6 +163,37 @@ class LlmNodeModelTests(TestCase):
         self.assertEqual(events[1]["state"]["analysis"], "analysis answer")
         self.assertEqual(events[1]["state"]["analysis_thinking"], "reading source")
 
+    def test_stream_analyze_node_yields_visible_draft_content_deltas(self):
+        from agents.nodes import analyze
+
+        _FakeChain.stream_chunks = [
+            SimpleNamespace(content="first ", additional_kwargs={}),
+            SimpleNamespace(content="second", additional_kwargs={}),
+        ]
+        fake_settings = SimpleNamespace(
+            openai_api_key="api-key",
+            openai_base_url="https://api.example.test/v1",
+            llm_model=EXPECTED_MODEL,
+        )
+
+        with (
+            patch.object(analyze, "settings", fake_settings),
+            patch.object(analyze.ChatPromptTemplate, "from_messages", return_value=_FakePrompt()),
+            patch.object(analyze, "ChatOpenAI"),
+        ):
+            events = asyncio.run(_collect_async_events(analyze.stream_analyze_node({
+                "query": "test query",
+                "documents": [{"content": "test document", "similarity": 0.99}],
+            })))
+
+        self.assertEqual(events[0]["type"], "draft")
+        self.assertEqual(events[0]["id"], "analysis-draft")
+        self.assertEqual(events[0]["text"], "first")
+        self.assertEqual(events[1]["type"], "draft")
+        self.assertEqual(events[1]["text"], "first second")
+        self.assertEqual(events[2]["type"], "final")
+        self.assertEqual(events[2]["state"]["analysis"], "first second")
+
     def test_generate_node_uses_configured_llm_model(self):
         from agents.nodes import generate
 
@@ -256,6 +287,38 @@ class LlmNodeModelTests(TestCase):
         self.assertEqual(events[1]["type"], "final")
         self.assertEqual(events[1]["state"]["report"], "# Final Report")
         self.assertEqual(events[1]["state"]["report_thinking"], "planning report")
+
+    def test_stream_generate_node_yields_visible_draft_content_deltas(self):
+        from agents.nodes import generate
+
+        _FakeChain.stream_chunks = [
+            SimpleNamespace(content="# Report\n\n", additional_kwargs={}),
+            SimpleNamespace(content="Finding one.", additional_kwargs={}),
+        ]
+        fake_settings = SimpleNamespace(
+            openai_api_key="api-key",
+            openai_base_url="https://api.example.test/v1",
+            llm_model=EXPECTED_MODEL,
+        )
+
+        with (
+            patch.object(generate, "settings", fake_settings),
+            patch.object(generate.ChatPromptTemplate, "from_messages", return_value=_FakePrompt()),
+            patch.object(generate, "ChatOpenAI"),
+        ):
+            events = asyncio.run(_collect_async_events(generate.stream_generate_node({
+                "query": "test query",
+                "documents": [{"content": "test document"}],
+                "analysis": "test analysis",
+            })))
+
+        self.assertEqual(events[0]["type"], "draft")
+        self.assertEqual(events[0]["id"], "report-draft")
+        self.assertEqual(events[0]["text"], "# Report")
+        self.assertEqual(events[1]["type"], "draft")
+        self.assertEqual(events[1]["text"], "# Report\n\nFinding one.")
+        self.assertEqual(events[2]["type"], "final")
+        self.assertEqual(events[2]["state"]["report"], "# Report\n\nFinding one.")
 
 
 class ResearchRouterThinkingTests(TestCase):

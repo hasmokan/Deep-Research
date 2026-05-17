@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts
+from services.langfuse_observability import ainvoke_langchain, astream_langchain, get_langfuse_tracer
 
 settings = get_settings()
 
@@ -31,7 +32,9 @@ async def analyze_node(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     chain = _build_analysis_chain()
-    response = await chain.ainvoke(_build_analysis_payload(query, documents))
+    payload = _build_analysis_payload(query, documents)
+    config = _langchain_config("analyze-llm", len(documents))
+    response = await ainvoke_langchain(chain, payload, config)
     content, thinking = extract_response_parts(response)
 
     return {
@@ -57,10 +60,13 @@ async def stream_analyze_node(state: dict[str, Any]):
         return
 
     chain = _build_analysis_chain()
+    payload = _build_analysis_payload(query, documents)
+    config = _langchain_config("analyze-llm", len(documents))
     content_parts: list[str] = []
     thinking_parts: list[str] = []
 
-    async for chunk in chain.astream(_build_analysis_payload(query, documents)):
+    stream = astream_langchain(chain, payload, config)
+    async for chunk in stream:
         content_delta, thinking_delta = extract_response_delta_parts(chunk)
 
         if thinking_delta:
@@ -75,6 +81,15 @@ async def stream_analyze_node(state: dict[str, Any]):
 
         if content_delta:
             content_parts.append(content_delta)
+            draft = "".join(content_parts).strip()
+            if draft and not thinking_parts:
+                yield {
+                    "type": "draft",
+                    "id": "analysis-draft",
+                    "stage": "analyze",
+                    "label": "Analysis draft",
+                    "text": draft,
+                }
 
     content, embedded_thinking = extract_response_parts(
         SimpleNamespace(content="".join(content_parts), additional_kwargs={})
@@ -139,3 +154,14 @@ def _build_analysis_payload(query: str, documents: list[dict[str, Any]]) -> dict
         "query": query,
         "documents": formatted_docs,
     }
+
+
+def _langchain_config(run_name: str, documents_count: int) -> dict[str, Any]:
+    return get_langfuse_tracer().langchain_config(
+        run_name,
+        metadata={
+            "feature": "deep-research",
+            "stage": "analyze",
+            "documents_count": documents_count,
+        },
+    )

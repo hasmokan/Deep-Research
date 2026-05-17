@@ -18,10 +18,16 @@ cp .env.example .env
 Edit `.env`:
 ```env
 SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-publishable-key
 SUPABASE_SERVICE_KEY=your-service-key
 OPENAI_API_KEY=your-openai-api-key
 FRONTEND_URL=http://localhost:3000
+RESEARCH_STORAGE_BACKEND=supabase
 ```
+
+`SUPABASE_SERVICE_KEY` is used only by the backend. It is required for persisted
+research threads/runs because the schema enables RLS on those tables and does not
+grant public policies.
 
 ### 2. Run Database Schema
 
@@ -45,11 +51,16 @@ After running the schema, you should have:
 **Tables:**
 - `documents` - Stores document content with vector embeddings
 - `research_sessions` - Tracks research queries and results
+- `research_threads` - Persists chat sessions and messages
+- `research_runs` - Persists research run metadata
+- `research_run_events` - Persists streaming run events for restore/replay
 
 **Indexes:**
 - `documents_embedding_idx` - IVFFlat index for fast vector similarity search
 - `documents_metadata_idx` - GIN index for metadata queries
 - `documents_created_at_idx` - Index for time-based queries
+- `research_threads_updated_at_idx` - Sorts recent chat sessions
+- `research_run_events_run_seq_idx` - Restores run events in stream order
 
 **Functions:**
 - `match_documents()` - Performs similarity search with threshold
@@ -65,6 +76,10 @@ uvicorn main:app --reload
 ```
 
 Visit: http://localhost:8000/health
+
+To keep using local JSON files for sessions and run events during development,
+leave `RESEARCH_STORAGE_BACKEND=json`. To persist them in Supabase for deployment,
+set `RESEARCH_STORAGE_BACKEND=supabase`.
 
 ## Vector Search Configuration
 

@@ -4,6 +4,7 @@
 
 import type {
   Document,
+  ResearchPlanStreamHandlers,
   ResearchPlanResponse,
   ResearchRequest,
   ResearchResponse,
@@ -16,7 +17,7 @@ import type {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-class ApiClient {
+export class ApiClient {
   private baseUrl: string;
 
   constructor(baseUrl: string = API_BASE_URL) {
@@ -65,6 +66,36 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(request),
     });
+  }
+
+  /**
+   * Generate a research plan and stream plan progress with Server-Sent Events
+   */
+  async streamResearchPlan(
+    request: ResearchRequest,
+    handlers: ResearchPlanStreamHandlers = {}
+  ): Promise<ResearchPlanResponse> {
+    const response = await fetch(`${this.baseUrl}/api/research/plan/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+      signal: handlers.signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        detail: 'Research plan stream failed',
+      }));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error('Research plan stream response was empty');
+    }
+
+    return this.readResearchPlanStream(response.body, handlers);
   }
 
   /**
@@ -159,6 +190,75 @@ class ApiClient {
     }
 
     throw new Error('Research stream ended before completion');
+  }
+
+  private async readResearchPlanStream(
+    body: ReadableStream<Uint8Array>,
+    handlers: ResearchPlanStreamHandlers
+  ): Promise<ResearchPlanResponse> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() ?? '';
+
+      for (const block of blocks) {
+        const result = this.handleResearchPlanStreamEvent(block, handlers);
+        if (result.type === 'complete') {
+          reader.releaseLock();
+          return result.payload;
+        }
+        if (result.type === 'error') {
+          reader.releaseLock();
+          throw new Error(result.message);
+        }
+      }
+
+      if (done) {
+        break;
+      }
+    }
+
+    throw new Error('Research plan stream ended before completion');
+  }
+
+  private handleResearchPlanStreamEvent(
+    block: string,
+    handlers: ResearchPlanStreamHandlers
+  ): { type: 'pending' } | { type: 'complete'; payload: ResearchPlanResponse } | { type: 'error'; message: string } {
+    const event = block
+      .split('\n')
+      .find((line) => line.startsWith('event: '))
+      ?.slice('event: '.length)
+      .trim();
+    const data = block
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => line.slice('data: '.length))
+      .join('\n');
+
+    if (!event || !data) {
+      return { type: 'pending' };
+    }
+
+    const payload = JSON.parse(data);
+
+    if (event === 'status') {
+      handlers.onStatus?.(payload);
+    } else if (event === 'plan') {
+      handlers.onPlan?.(payload);
+    } else if (event === 'complete') {
+      return { type: 'complete', payload };
+    } else if (event === 'stream_error') {
+      return { type: 'error', message: payload.detail ?? 'Research plan stream failed' };
+    }
+
+    return { type: 'pending' };
   }
 
   private handleResearchStreamEvent(

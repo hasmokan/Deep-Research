@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts
+from services.langfuse_observability import ainvoke_langchain, astream_langchain, get_langfuse_tracer
 
 settings = get_settings()
 
@@ -33,7 +34,9 @@ async def generate_node(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     chain = _build_generate_chain()
-    response = await chain.ainvoke(_build_generate_payload(query, display_query, analysis, documents_count))
+    payload = _build_generate_payload(query, display_query, analysis, documents_count)
+    config = _langchain_config("report-llm", documents_count)
+    response = await ainvoke_langchain(chain, payload, config)
     content, thinking = extract_response_parts(response)
 
     return {
@@ -61,10 +64,13 @@ async def stream_generate_node(state: dict[str, Any]):
         return
 
     chain = _build_generate_chain()
+    payload = _build_generate_payload(query, display_query, analysis, documents_count)
+    config = _langchain_config("report-llm", documents_count)
     content_parts: list[str] = []
     thinking_parts: list[str] = []
 
-    async for chunk in chain.astream(_build_generate_payload(query, display_query, analysis, documents_count)):
+    stream = astream_langchain(chain, payload, config)
+    async for chunk in stream:
         content_delta, thinking_delta = extract_response_delta_parts(chunk)
 
         if thinking_delta:
@@ -79,6 +85,15 @@ async def stream_generate_node(state: dict[str, Any]):
 
         if content_delta:
             content_parts.append(content_delta)
+            draft = "".join(content_parts).strip()
+            if draft and not thinking_parts:
+                yield {
+                    "type": "draft",
+                    "id": "report-draft",
+                    "stage": "report",
+                    "label": "Report draft",
+                    "text": draft,
+                }
 
     content, embedded_thinking = extract_response_parts(
         SimpleNamespace(content="".join(content_parts), additional_kwargs={})
@@ -152,3 +167,14 @@ def _build_generate_payload(
         "analysis": analysis,
         "documents_count": documents_count,
     }
+
+
+def _langchain_config(run_name: str, documents_count: int) -> dict[str, Any]:
+    return get_langfuse_tracer().langchain_config(
+        run_name,
+        metadata={
+            "feature": "deep-research",
+            "stage": "report",
+            "documents_count": documents_count,
+        },
+    )

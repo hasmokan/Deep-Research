@@ -144,7 +144,7 @@ export function buildResearchActivity(
 
     thinking.forEach((message, index) => {
       const thinkingEvent: ResearchActivityEvent = {
-        id: `thinking-${index}-${message.stage}`,
+        id: message.id ?? `thinking-${index}-${message.stage}`,
         stage: message.stage,
         kind: 'thinking',
         title: message.label,
@@ -200,7 +200,7 @@ export function buildResearchActivity(
 
   thinking.forEach((message, index) => {
     events.push({
-      id: `thinking-${index}-${message.stage}`,
+      id: message.id ?? `thinking-${index}-${message.stage}`,
       stage: message.stage,
       kind: 'thinking' as const,
       title: message.label,

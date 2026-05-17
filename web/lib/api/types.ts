@@ -82,6 +82,18 @@ export interface ResearchStreamMetadata {
   run_id: string;
 }
 
+export interface ResearchPlanStreamStatus {
+  stage: 'plan';
+  label: string;
+  message: string;
+}
+
+export interface ResearchPlanStreamHandlers {
+  onStatus?: (status: ResearchPlanStreamStatus) => void;
+  onPlan?: (plan: ResearchPlanResponse) => void;
+  signal?: AbortSignal;
+}
+
 export interface ResearchStreamStatus {
   stage: 'search' | 'analyze' | 'report';
   label: string;

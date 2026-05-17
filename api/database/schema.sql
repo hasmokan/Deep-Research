@@ -36,6 +36,7 @@ END;
 $$ language 'plpgsql';
 
 -- Trigger to automatically update updated_at
+DROP TRIGGER IF EXISTS update_documents_updated_at ON documents;
 CREATE TRIGGER update_documents_updated_at
 BEFORE UPDATE ON documents
 FOR EACH ROW
@@ -90,7 +91,69 @@ CREATE INDEX IF NOT EXISTS research_sessions_created_at_idx
 ON research_sessions (created_at DESC);
 
 -- Trigger for research_sessions updated_at
+DROP TRIGGER IF EXISTS update_research_sessions_updated_at ON research_sessions;
 CREATE TRIGGER update_research_sessions_updated_at
 BEFORE UPDATE ON research_sessions
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
+
+-- Persisted chat threads for multi-session research conversations
+CREATE TABLE IF NOT EXISTS research_threads (
+    thread_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT 'New chat',
+    messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS research_threads_updated_at_idx
+ON research_threads (updated_at DESC);
+
+DROP TRIGGER IF EXISTS update_research_threads_updated_at ON research_threads;
+CREATE TRIGGER update_research_threads_updated_at
+BEFORE UPDATE ON research_threads
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+
+-- Persisted SSE run metadata and append-only event history
+CREATE TABLE IF NOT EXISTS research_runs (
+    run_id TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS research_runs_updated_at_idx
+ON research_runs (updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS research_runs_status_idx
+ON research_runs (status);
+
+DROP TRIGGER IF EXISTS update_research_runs_updated_at ON research_runs;
+CREATE TRIGGER update_research_runs_updated_at
+BEFORE UPDATE ON research_runs
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS research_run_events (
+    id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES research_runs(run_id) ON DELETE CASCADE,
+    event TEXT NOT NULL,
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    seq INTEGER NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE (run_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS research_run_events_run_seq_idx
+ON research_run_events (run_id, seq);
+
+CREATE INDEX IF NOT EXISTS research_run_events_created_at_idx
+ON research_run_events (created_at DESC);
+
+-- These tables are intended for server-side access with SUPABASE_SERVICE_KEY.
+-- Keep RLS enabled so publishable/anon clients cannot read other users' threads.
+ALTER TABLE research_threads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE research_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE research_run_events ENABLE ROW LEVEL SECURITY;

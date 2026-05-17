@@ -11,6 +11,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from core.config import get_settings
+from supabase import Client, create_client
+
 
 _SAFE_THREAD_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -91,4 +94,106 @@ class JsonResearchThreadStore:
         return thread if isinstance(thread, dict) else None
 
 
-research_thread_store = JsonResearchThreadStore()
+class SupabaseResearchThreadStore:
+    """Supabase-backed conversation thread storage."""
+
+    def __init__(self, client: Client | None = None):
+        self.supabase = client or _create_supabase_client()
+
+    def create_thread(self, title: str = "New chat", messages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        return self.upsert_thread(f"thread-{uuid.uuid4()}", title=title, messages=messages or [])
+
+    def upsert_thread(
+        self,
+        thread_id: str,
+        *,
+        title: str = "New chat",
+        messages: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        _validate_thread_id(thread_id)
+        timestamp = _now()
+        existing = self.get_thread(thread_id)
+        created_at = existing.get("created_at") if existing else timestamp
+        thread = {
+            "thread_id": thread_id,
+            "title": title or "New chat",
+            "messages": _jsonable(messages or []),
+            "created_at": created_at,
+            "updated_at": timestamp,
+        }
+
+        response = (
+            self.supabase
+            .table("research_threads")
+            .upsert(thread, on_conflict="thread_id")
+            .execute()
+        )
+        return _normalize_thread(_first_row(response.data) or thread)
+
+    def get_thread(self, thread_id: str) -> dict[str, Any] | None:
+        _validate_thread_id(thread_id)
+        response = (
+            self.supabase
+            .table("research_threads")
+            .select("*")
+            .eq("thread_id", thread_id)
+            .limit(1)
+            .execute()
+        )
+        row = _first_row(response.data)
+        return _normalize_thread(row) if row else None
+
+    def list_threads(self) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("research_threads")
+            .select("*")
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        return [_normalize_thread(row) for row in response.data or []]
+
+
+def create_research_thread_store():
+    settings = get_settings()
+    if settings.research_storage_backend.lower() == "supabase":
+        return SupabaseResearchThreadStore()
+    return JsonResearchThreadStore()
+
+
+def _create_supabase_client() -> Client:
+    settings = get_settings()
+    return create_client(settings.supabase_url, settings.supabase_service_key or settings.supabase_key)
+
+
+def _validate_thread_id(thread_id: str) -> None:
+    if not _SAFE_THREAD_ID.match(thread_id):
+        raise ValueError(f"Invalid thread_id: {thread_id!r}")
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _jsonable(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _first_row(rows: Any) -> dict[str, Any] | None:
+    if isinstance(rows, list) and rows:
+        row = rows[0]
+        return row if isinstance(row, dict) else None
+    return None
+
+
+def _normalize_thread(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "thread_id": row.get("thread_id", ""),
+        "title": row.get("title") or "New chat",
+        "messages": row.get("messages") if isinstance(row.get("messages"), list) else [],
+        "created_at": row.get("created_at") or _now(),
+        "updated_at": row.get("updated_at") or row.get("created_at") or _now(),
+    }
+
+
+research_thread_store = create_research_thread_store()

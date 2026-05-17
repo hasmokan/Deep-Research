@@ -122,6 +122,33 @@ test('buildResearchActivity keeps backend trace and model thinking events', () =
   assert.match(activity[2].detail, /compare source reliability/);
 });
 
+test('buildResearchActivity preserves streamed thinking ids for animated updates', () => {
+  const activity = buildResearchActivity(
+    [],
+    [
+      {
+        id: 'analysis-thinking-stream',
+        stage: 'analyze',
+        label: 'Thinking',
+        text: 'Comparing source quality before drafting.',
+      },
+    ],
+    [],
+    [
+      {
+        id: 'read-sources',
+        stage: 'analyze',
+        kind: 'reasoning',
+        title: 'Read sources',
+        detail: 'Reading the strongest matches.',
+      },
+    ],
+  );
+
+  assert.equal(activity[1].id, 'analysis-thinking-stream');
+  assert.equal(activity[1].kind, 'thinking');
+});
+
 test('buildResearchActivityStream collapses older agent steps like a message stream', () => {
   const activity = buildResearchActivity(
     [],

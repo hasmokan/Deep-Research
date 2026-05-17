@@ -3,10 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
 
-from routers import research
-
-# Load environment variables
 load_dotenv()
+
+from routers import research
+from services.langfuse_observability import get_langfuse_tracer
 
 app = FastAPI(
     title="Deep Research API",
@@ -41,6 +41,11 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.on_event("shutdown")
+def shutdown_observability():
+    get_langfuse_tracer().shutdown()
 
 if __name__ == "__main__":
     import uvicorn

@@ -61,6 +61,65 @@ class ResearchPlanRouteTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {**generated_plan, "should_plan": True})
 
+    def test_plan_stream_endpoint_emits_status_plan_and_complete_events(self):
+        client = TestClient(app)
+        generated_plan = {
+            "query": "Compare AI search products",
+            "source_label": "Public web",
+            "summary": "Compare AI search products by source coverage, UX, and report quality.",
+            "steps": [
+                {
+                    "id": "scope",
+                    "title": "Define comparison criteria",
+                    "detail": "Clarify products, dimensions, and the evidence needed for a useful comparison.",
+                },
+                {
+                    "id": "sources",
+                    "title": "Collect product and review sources",
+                    "detail": "Use official pages, documentation, reviews, and recent benchmark discussions.",
+                },
+                {
+                    "id": "evidence",
+                    "title": "Compare evidence across sources",
+                    "detail": "Separate vendor claims from independent observations and identify tradeoffs.",
+                },
+                {
+                    "id": "report",
+                    "title": "Write the recommendation",
+                    "detail": "Summarize findings with citations and call out where evidence is uncertain.",
+                },
+            ],
+        }
+
+        async def fake_generate_research_plan(query: str):
+            self.assertEqual(query, "Compare AI search products")
+            return generated_plan
+
+        with (
+            patch(
+                "routers.research.assess_research_plan_need",
+                return_value={"should_plan": True, "reason": "Broad research task."},
+            ),
+            patch(
+                "routers.research.generate_research_plan",
+                side_effect=fake_generate_research_plan,
+            ),
+        ):
+            response = client.post(
+                "/api/research/plan/stream",
+                json={"query": "Compare AI search products"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"].split(";")[0], "text/event-stream")
+
+        events = _parse_sse_events(response.text)
+        self.assertEqual([event["event"] for event in events], ["status", "status", "plan", "complete"])
+        self.assertEqual(events[0]["data"]["stage"], "plan")
+        self.assertEqual(events[0]["data"]["label"], "Planning")
+        self.assertEqual(events[2]["data"], {**generated_plan, "should_plan": True})
+        self.assertEqual(events[3]["data"], {**generated_plan, "should_plan": True})
+
     def test_plan_endpoint_can_skip_plan_for_simple_follow_up(self):
         client = TestClient(app)
 
@@ -226,3 +285,13 @@ class ResearchPlanGenerationTests(IsolatedAsyncioTestCase):
 
         self.assertFalse(result["should_plan"])
         self.assertEqual(result["reason"], "Simple source question.")
+
+
+def _parse_sse_events(text: str) -> list[dict]:
+    events = []
+    for block in text.strip().split("\n\n"):
+        lines = block.splitlines()
+        event = next(line.removeprefix("event: ").strip() for line in lines if line.startswith("event: "))
+        data = "\n".join(line.removeprefix("data: ") for line in lines if line.startswith("data: "))
+        events.append({"event": event, "data": __import__("json").loads(data)})
+    return events

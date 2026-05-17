@@ -70,6 +70,16 @@ class ResearchRequestLatestResultTests(TestCase):
 
 
 class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
+    def setUp(self):
+        from services.langfuse_observability import NoopLangfuseTracer
+
+        langfuse_patcher = patch(
+            "agents.research_stream.get_langfuse_tracer",
+            return_value=NoopLangfuseTracer(),
+        )
+        langfuse_patcher.start()
+        self.addCleanup(langfuse_patcher.stop)
+
     async def test_source_question_is_answered_from_latest_documents(self):
         from agents.nodes import conversation_router
 

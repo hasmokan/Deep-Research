@@ -97,11 +97,20 @@ cp .env.example .env
 # Edit .env and add your credentials:
 # - SUPABASE_URL
 # - SUPABASE_KEY
+# - SUPABASE_SERVICE_KEY (required when RESEARCH_STORAGE_BACKEND=supabase)
 # - OPENAI_API_KEY
 # - OPENAI_BASE_URL (if using an OpenAI-compatible provider)
 # - LLM_MODEL=minimax/minimax-m2.7
 # - EMBEDDING_MODEL=openai/text-embedding-3-small
+# - RESEARCH_STORAGE_BACKEND=json or supabase
+# - LANGFUSE_ENABLED=true (optional, for trace/eval observability)
+# - LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL
 ```
+
+Optional Langfuse tracing records each research run as an agent trace with
+intent routing, web search candidates, analysis generation, report generation,
+and completion/error metadata. This is useful for evaluating bad retrievals and
+comparing search changes.
 
 ### 4. Frontend Setup
 

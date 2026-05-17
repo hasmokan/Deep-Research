@@ -17,7 +17,7 @@ async def web_search_node(state: dict[str, Any]) -> dict[str, Any]:
         Updated state with 'web_results' field
     """
     web_search = WebSearchTool()
-    query = state["query"]
+    query = state.get("display_query") or state["query"]
 
     all_results = await web_search.search(query=query, max_results=15)
 

@@ -11,6 +11,7 @@ from services.research_runs import research_run_store
 from services.research_threads import research_thread_store
 from services.vector_store import get_vector_store
 from datetime import datetime
+import json
 import uuid
 
 router = APIRouter(prefix="/api/research", tags=["research"])
@@ -52,6 +53,83 @@ async def create_research_plan(request: ResearchRequest):
             status_code=500,
             detail=f"Research plan generation failed: {str(e)}"
         )
+
+
+@router.post("/plan/stream")
+async def stream_research_plan(request: ResearchRequest):
+    """
+    Generate a query-specific research plan and stream plan progress as SSE.
+    """
+    if request.thread_id:
+        research_thread_store.upsert_thread(
+            request.thread_id,
+            title=request.query,
+            messages=[message.model_dump() for message in request.messages],
+        )
+
+    async def events():
+        try:
+            yield _format_sse_event(
+                "status",
+                {
+                    "stage": "plan",
+                    "label": "Planning",
+                    "message": "Clarifying the research objective and context.",
+                },
+            )
+
+            has_follow_up_context = bool(request.messages) or bool(request.latest_result)
+
+            if has_follow_up_context:
+                plan_need = await assess_research_plan_need(request.query)
+
+                if not plan_need["should_plan"]:
+                    payload = {
+                        "query": request.query,
+                        "source_label": "Conversation",
+                        "summary": plan_need.get("reason") or "This follow-up can be answered directly.",
+                        "steps": [],
+                        "should_plan": False,
+                    }
+                    yield _format_sse_event("plan", payload)
+                    yield _format_sse_event("complete", payload)
+                    return
+
+            yield _format_sse_event(
+                "status",
+                {
+                    "stage": "plan",
+                    "label": "Drafting plan",
+                    "message": "Structuring source discovery, evidence comparison, and report synthesis.",
+                },
+            )
+
+            contextual_query = build_contextual_research_query(request.query, request.messages)
+            plan = await generate_research_plan(contextual_query)
+            payload = {**plan, "query": request.query, "should_plan": True}
+
+            yield _format_sse_event("plan", payload)
+            yield _format_sse_event("complete", payload)
+        except Exception as exc:
+            yield _format_sse_event(
+                "stream_error",
+                {"detail": f"Research plan generation failed: {exc}"},
+            )
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _format_sse_event(event: str, data: dict) -> str:
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {payload}\n\n"
 
 
 @router.get("/stream")

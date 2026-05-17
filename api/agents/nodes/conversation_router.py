@@ -10,6 +10,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_parts
+from services.langfuse_observability import ainvoke_langchain, get_langfuse_tracer
 
 
 settings = get_settings()
@@ -95,10 +96,13 @@ async def _classify_follow_up_intent_with_llm(
         base_url=settings.openai_base_url,
     )
     prompt = _build_follow_up_intent_prompt()
-    response = await (prompt | llm).ainvoke({
+    chain = prompt | llm
+    payload = {
         "query": query,
         "artifact": _artifact_routing_context(latest_result),
-    })
+    }
+    config = _langchain_config("intent-router-llm", "intent-routing")
+    response = await ainvoke_langchain(chain, payload, config)
     content, _thinking = extract_response_parts(response)
     payload = _parse_intent_payload(content)
 
@@ -256,10 +260,13 @@ Previous research report:
 
 Answer the follow-up directly."""),
         ])
-        response = await (prompt | llm).ainvoke({
+        chain = prompt | llm
+        payload = {
             "query": visible_query,
             "report": report,
-        })
+        }
+        config = _langchain_config("artifact-follow-up-llm", "answer")
+        response = await ainvoke_langchain(chain, payload, config)
         answer, thinking = extract_response_parts(response)
         result_type = "answer"
 
@@ -278,6 +285,16 @@ Answer the follow-up directly."""),
 def _normalized_query(state: dict[str, Any]) -> str:
     query = state.get("display_query") or state.get("query") or ""
     return str(query).strip().lower()
+
+
+def _langchain_config(run_name: str, stage: str) -> dict[str, Any]:
+    return get_langfuse_tracer().langchain_config(
+        run_name,
+        metadata={
+            "feature": "deep-research",
+            "stage": stage,
+        },
+    )
 
 
 def _contains_any(query: str, terms: tuple[str, ...]) -> bool:

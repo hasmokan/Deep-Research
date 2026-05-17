@@ -11,6 +11,18 @@ from main import app
 
 
 class ResearchStreamTests(TestCase):
+    def setUp(self):
+        from agents import research_stream
+        from services.langfuse_observability import NoopLangfuseTracer
+
+        langfuse_patcher = patch.object(
+            research_stream,
+            "get_langfuse_tracer",
+            return_value=NoopLangfuseTracer(),
+        )
+        langfuse_patcher.start()
+        self.addCleanup(langfuse_patcher.stop)
+
     def test_formats_sse_event_with_json_payload(self):
         from agents.research_stream import format_sse_event
 
@@ -104,6 +116,91 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(thinking_payloads[0]["text"], "Reading the source.")
         self.assertEqual(thinking_payloads[1]["id"], "report-thinking")
         self.assertEqual(thinking_payloads[1]["text"], "Drafting the report.")
+
+    def test_stream_emits_llm_drafts_as_live_thinking_events(self):
+        from agents import research_stream
+
+        async def fake_web_search_node(state):
+            return {
+                "documents": [
+                    {
+                        "id": "web_0",
+                        "content": "**Example Source**\n\nUseful source text.",
+                        "metadata": {"title": "Example Source"},
+                        "similarity": 1.0,
+                    }
+                ],
+                "web_search_completed": True,
+            }
+
+        async def fake_analyze_node(state):
+            yield {
+                "type": "draft",
+                "id": "analysis-draft",
+                "stage": "analyze",
+                "label": "Analysis draft",
+                "text": "Partial analysis",
+            }
+            yield {
+                "type": "draft",
+                "id": "analysis-draft",
+                "stage": "analyze",
+                "label": "Analysis draft",
+                "text": "Partial analysis done.",
+            }
+            yield {
+                "type": "final",
+                "state": {
+                    "analysis": "Partial analysis done.",
+                    "analysis_completed": True,
+                },
+            }
+
+        async def fake_generate_node(state):
+            yield {
+                "type": "draft",
+                "id": "report-draft",
+                "stage": "report",
+                "label": "Report draft",
+                "text": "# Report",
+            }
+            yield {
+                "type": "draft",
+                "id": "report-draft",
+                "stage": "report",
+                "label": "Report draft",
+                "text": "# Report\n\nFinal text.",
+            }
+            yield {
+                "type": "final",
+                "state": {
+                    "report": "# Report\n\nFinal text.",
+                    "report_completed": True,
+                },
+            }
+
+        with (
+            patch.object(research_stream, "web_search_node", fake_web_search_node),
+            patch.object(research_stream, "stream_analyze_node", fake_analyze_node),
+            patch.object(research_stream, "stream_generate_node", fake_generate_node),
+        ):
+            events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
+
+        thinking_payloads = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: thinking")
+        ]
+
+        self.assertEqual(
+            [(payload["id"], payload["text"]) for payload in thinking_payloads],
+            [
+                ("analysis-draft", "Partial analysis"),
+                ("analysis-draft", "Partial analysis done."),
+                ("report-draft", "# Report"),
+                ("report-draft", "# Report\n\nFinal text."),
+            ],
+        )
 
     def test_stream_route_returns_text_event_stream(self):
         from agents.research_stream import format_sse_event
