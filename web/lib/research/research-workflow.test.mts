@@ -5,9 +5,11 @@ import {
   buildResearchActivity,
   buildResearchActivityStream,
   createResearchPlan,
+  getRevealedPlanStepCount,
   getResearchQueryOverride,
   getResearchSubmitAction,
   normalizeResearchPlan,
+  shouldRenderResearchPlanShell,
 } from './research-workflow.ts';
 
 test('createResearchPlan turns a query into a reviewable deep research plan', () => {
@@ -18,6 +20,22 @@ test('createResearchPlan turns a query into a reviewable deep research plan', ()
   assert.equal(plan.steps.length, 4);
   assert.equal(plan.steps[0].title, 'Clarify the research objective');
   assert.ok(plan.steps.at(-1)?.detail.includes('report'));
+});
+
+test('getRevealedPlanStepCount reveals final plan steps one at a time', () => {
+  assert.equal(getRevealedPlanStepCount(4, 0, 100, 250), 0);
+  assert.equal(getRevealedPlanStepCount(4, 99, 100, 250), 0);
+  assert.equal(getRevealedPlanStepCount(4, 100, 100, 250), 1);
+  assert.equal(getRevealedPlanStepCount(4, 349, 100, 250), 1);
+  assert.equal(getRevealedPlanStepCount(4, 350, 100, 250), 2);
+  assert.equal(getRevealedPlanStepCount(4, 850, 100, 250), 4);
+  assert.equal(getRevealedPlanStepCount(4, 2000, 100, 250), 4);
+});
+
+test('shouldRenderResearchPlanShell keeps the plan panel visible while waiting for model output', () => {
+  assert.equal(shouldRenderResearchPlanShell({ isPlanning: true, hasPlan: false }), true);
+  assert.equal(shouldRenderResearchPlanShell({ isPlanning: false, hasPlan: true }), true);
+  assert.equal(shouldRenderResearchPlanShell({ isPlanning: false, hasPlan: false }), false);
 });
 
 test('buildResearchActivity creates a readable activity history from stream events', () => {

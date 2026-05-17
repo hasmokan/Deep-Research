@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Loader2, MoreHorizontal, Share, Sparkles } from 'lucide-react';
+import { CheckCircle2, MoreHorizontal, Share, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { ChatSidebar } from '@/components/layouts/chat-sidebar';
@@ -13,7 +13,7 @@ import { ErrorState, LoadingState, ReportSidebar, ResultsDisplay, SearchForm } f
 import { MarkdownContent } from '@/components/research/markdown-content';
 import { ResearchPlanPanel } from '@/components/research/research-plan-panel';
 import { apiClient } from '@/lib/api';
-import type { ResearchPlanStreamStatus, ResearchResult } from '@/lib/api/types';
+import type { ResearchResult } from '@/lib/api/types';
 import {
   appendResearchActivityStatus,
   appendResearchActivityDocuments,
@@ -33,6 +33,7 @@ import {
   createResearchPlan,
   getResearchQueryOverride,
   normalizeResearchPlan,
+  shouldRenderResearchPlanShell,
   type ResearchPlan,
 } from '@/lib/research/research-workflow';
 import {
@@ -144,7 +145,6 @@ export default function Home() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [hasLoadedSessions, setHasLoadedSessions] = useState(false);
   const [isPlanning, setPlanning] = useState(false);
-  const [planStreamStatuses, setPlanStreamStatuses] = useState<ResearchPlanStreamStatus[]>([]);
   const [isDeepResearchMode, setDeepResearchMode] = useState(true);
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
@@ -186,6 +186,10 @@ export default function Home() {
   const hasInlineRunningActivity = messages.some((message) => (
     message.researchActivity?.status === 'running' && !message.result
   ));
+  const shouldShowPlanShell = shouldRenderResearchPlanShell({
+    isPlanning,
+    hasPlan: Boolean(activePlan),
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -287,7 +291,7 @@ export default function Home() {
         block: 'end',
       });
     }
-  }, [hasConversation, messages, researchPlan, planStreamStatuses, isPlanning, isLoading, error, result]);
+  }, [hasConversation, messages, researchPlan, isPlanning, isLoading, error, result]);
 
   const persistMessagesToSession = useCallback((sessionId: string, nextMessages: ConversationMessage[]) => {
     const existingSession = sessionsRef.current.find((session) => session.id === sessionId);
@@ -410,7 +414,6 @@ export default function Home() {
     setActiveSessionId(session.id);
     setMessages(session.messages);
     setResearchPlan(null);
-    setPlanStreamStatuses([]);
     setLocalQuery('');
     setQuery(session.title === 'New chat' ? '' : session.title);
     setError(null);
@@ -418,6 +421,7 @@ export default function Home() {
     setDeepResearchMode(!session.latestResult);
     resetStream();
     setLoading(false);
+    setPlanning(false);
   };
 
   const handleNewChat = () => {
@@ -462,7 +466,7 @@ export default function Home() {
     if (researchPlan && nextQuery.trim() && nextQuery.trim() !== researchPlan.query) {
       removeLastUserMessageForQuery(researchPlan.query);
       setResearchPlan(null);
-      setPlanStreamStatuses([]);
+      setPlanning(false);
     }
   };
 
@@ -485,8 +489,9 @@ export default function Home() {
     setResult(null);
     resetStream();
     setResearchPlan(null);
-    setPlanStreamStatuses([]);
     setPlanning(true);
+
+    let shouldRevealPlan = false;
 
     try {
       const generatedPlan = await apiClient.streamResearchPlan(
@@ -496,17 +501,11 @@ export default function Home() {
           messages: history,
           latest_result: latestResultForFollowUp,
         },
-        {
-          onStatus: (status) => {
-            setPlanStreamStatuses((statuses) => [...statuses, status]);
-          },
-        },
       );
       const normalizedPlan = normalizeResearchPlan(generatedPlan);
 
       if (!normalizedPlan.shouldPlan) {
         setResearchPlan(null);
-        setPlanStreamStatuses([]);
         setPlanning(false);
         await handleStartResearch(requestedQuery, {
           skipPlan: true,
@@ -515,11 +514,15 @@ export default function Home() {
         return;
       }
 
+      shouldRevealPlan = true;
       setResearchPlan(normalizedPlan);
     } catch {
+      shouldRevealPlan = true;
       setResearchPlan(createResearchPlan(requestedQuery));
     } finally {
-      setPlanning(false);
+      if (!shouldRevealPlan) {
+        setPlanning(false);
+      }
     }
   };
 
@@ -581,7 +584,6 @@ export default function Home() {
       setError(null);
       setResult(null);
       resetStream();
-      setPlanStreamStatuses([]);
 
       const researchResult = await apiClient.streamResearch(
         {
@@ -699,7 +701,7 @@ export default function Home() {
     setError(null);
     setResult(null);
     resetStream();
-    setPlanStreamStatuses([]);
+    setPlanning(false);
   };
 
   const handleEditPlan = () => {
@@ -712,8 +714,12 @@ export default function Home() {
       removeLastUserMessageForQuery(planQuery);
     }
     setResearchPlan(null);
-    setPlanStreamStatuses([]);
+    setPlanning(false);
   };
+
+  const handlePlanRevealComplete = useCallback(() => {
+    setPlanning(false);
+  }, []);
 
   const handleToggleDeepResearchMode = () => {
     setDeepResearchMode((enabled) => !enabled);
@@ -777,48 +783,26 @@ export default function Home() {
                   )
                 ))}
 
-                {activePlan && (
+                {shouldShowPlanShell && (
                   <div className="mx-auto max-w-[820px]">
                     <ResearchPlanPanel
+                      key={activePlan
+                        ? `${activePlan.query}-${activePlan.steps.map((step) => step.id).join('-')}`
+                        : `planning-shell-${query || currentQuery}`}
                       plan={activePlan}
-                      activity={activePlanActivityMessage?.researchActivity}
-                      isLoading={isLoading}
-                      onEdit={handleEditPlan}
-                      onCancel={handleCancelPlan}
-                      onStart={() => {
-                        void handleStartResearch();
-                      }}
+                      activity={!isPlanning ? activePlanActivityMessage?.researchActivity : undefined}
+                      isLoading={isLoading || isPlanning}
+                      isStreaming={isPlanning && Boolean(activePlan)}
+                      revealSteps={isPlanning && Boolean(activePlan)}
+                      onRevealComplete={activePlan ? handlePlanRevealComplete : undefined}
+                      onEdit={!isPlanning ? handleEditPlan : undefined}
+                      onCancel={!isPlanning ? handleCancelPlan : undefined}
+                      onStart={!isPlanning
+                        ? () => {
+                            void handleStartResearch();
+                          }
+                        : undefined}
                     />
-                  </div>
-                )}
-
-                {isPlanning && (
-                  <div className="mx-auto max-w-[720px] rounded-[18px] border border-border bg-card p-5 text-muted-foreground shadow-sm">
-                    <div className="flex items-start gap-3">
-                      <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-foreground">
-                          {planStreamStatuses.at(-1)?.label ?? 'Generating research plan'}
-                        </p>
-                        <p className="mt-1 text-sm leading-6">
-                          {planStreamStatuses.at(-1)?.message ?? 'Preparing a query-specific research route.'}
-                        </p>
-                      </div>
-                    </div>
-
-                    {planStreamStatuses.length > 0 && (
-                      <div className="mt-4 space-y-2 border-t border-border pt-4">
-                        {planStreamStatuses.map((status, index) => (
-                          <div key={`${status.stage}-${status.label}-${index}`} className="flex gap-3 text-sm leading-6">
-                            <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/70" />
-                            <span className="min-w-0">
-                              <span className="font-medium text-foreground">{status.label}</span>
-                              <span className="text-muted-foreground"> - {status.message}</span>
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 )}
 

@@ -30,6 +30,11 @@ export interface ResearchSubmitDecisionInput {
   isDeepResearchMode: boolean;
 }
 
+export interface ResearchPlanShellInput {
+  isPlanning: boolean;
+  hasPlan: boolean;
+}
+
 export interface ResearchActivityEvent {
   id: string;
   stage: ResearchStreamStatus['stage'] | ResearchStreamThinking['stage'] | ResearchStreamTrace['stage'];
@@ -47,9 +52,32 @@ export interface ResearchActivityStream {
 }
 
 const DEFAULT_VISIBLE_AGENT_EVENTS = 2;
+export const PLAN_FIRST_STEP_REVEAL_DELAY_MS = 120;
+export const PLAN_STEP_REVEAL_INTERVAL_MS = 520;
 
 export function getResearchQueryOverride(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+export function getRevealedPlanStepCount(
+  totalSteps: number,
+  elapsedMs: number,
+  firstStepDelayMs: number = PLAN_FIRST_STEP_REVEAL_DELAY_MS,
+  stepRevealIntervalMs: number = PLAN_STEP_REVEAL_INTERVAL_MS,
+): number {
+  if (totalSteps <= 0 || elapsedMs < firstStepDelayMs) {
+    return 0;
+  }
+
+  const revealedSteps = Math.floor((elapsedMs - firstStepDelayMs) / stepRevealIntervalMs) + 1;
+  return Math.min(totalSteps, revealedSteps);
+}
+
+export function shouldRenderResearchPlanShell({
+  isPlanning,
+  hasPlan,
+}: ResearchPlanShellInput): boolean {
+  return isPlanning || hasPlan;
 }
 
 export function createResearchPlan(query: string): ResearchPlan {

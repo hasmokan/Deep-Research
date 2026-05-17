@@ -4,7 +4,7 @@
  * Agent trace component with live thinking progress.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Activity,
   Brain,
@@ -25,40 +25,12 @@ import {
 import { useResearchStore } from '@/lib/store/research';
 import type { Document, ResearchStreamTraceDocument } from '@/lib/api/types';
 import type { ConversationResearchActivity, ResearchActivityStatus } from '@/lib/research/conversation';
+import { useTypewriterText } from '@/lib/research/typewriter';
 
 type LoadingStatus = 'pending' | 'active' | 'completed';
 
 interface LoadingStateProps {
   activity?: ConversationResearchActivity;
-}
-
-const TYPEWRITER_INTERVAL_MS = 18;
-const TYPEWRITER_STEP = 3;
-
-function useTypewriterText(text: string, enabled: boolean) {
-  const [visibleText, setVisibleText] = useState('');
-
-  useEffect(() => {
-    if (!enabled || !text) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      setVisibleText((current) => {
-        const stablePrefix = text.startsWith(current) ? current : '';
-        if (stablePrefix.length >= text.length) {
-          window.clearInterval(timer);
-          return text;
-        }
-
-        return text.slice(0, Math.min(text.length, stablePrefix.length + TYPEWRITER_STEP));
-      });
-    }, TYPEWRITER_INTERVAL_MS);
-
-    return () => window.clearInterval(timer);
-  }, [enabled, text]);
-
-  return enabled ? visibleText : text;
 }
 
 function getBadgeLabel(status: ResearchActivityStatus) {
