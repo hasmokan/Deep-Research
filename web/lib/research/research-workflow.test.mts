@@ -66,7 +66,7 @@ test('buildResearchActivity creates a readable activity history from stream even
   assert.equal(activity[3].kind, 'thinking');
 });
 
-test('buildResearchActivity prefers backend trace events when available', () => {
+test('buildResearchActivity keeps backend trace and model thinking events', () => {
   const activity = buildResearchActivity(
     [
       {
@@ -75,7 +75,13 @@ test('buildResearchActivity prefers backend trace events when available', () => 
         message: 'Searching the web.',
       },
     ],
-    [],
+    [
+      {
+        stage: 'analyze',
+        label: 'Analysis thinking',
+        text: 'I should compare source reliability before drafting the report.',
+      },
+    ],
     [],
     [
       {
@@ -106,12 +112,14 @@ test('buildResearchActivity prefers backend trace events when available', () => 
 
   assert.deepEqual(
     activity.map((event) => event.title),
-    ['Search web', 'Sources found'],
+    ['Search web', 'Sources found', 'Analysis thinking'],
   );
   assert.equal(activity[0].kind, 'tool_call');
   const traceDocument = activity[1].documents?.[0];
   assert.ok(traceDocument && 'title' in traceDocument);
   assert.equal(traceDocument.title, '真实来源');
+  assert.equal(activity[2].kind, 'thinking');
+  assert.match(activity[2].detail, /compare source reliability/);
 });
 
 test('buildResearchActivityStream collapses older agent steps like a message stream', () => {

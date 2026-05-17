@@ -89,6 +89,7 @@ export interface ResearchStreamStatus {
 }
 
 export interface ResearchStreamThinking {
+  id?: string;
   stage: 'analyze' | 'report';
   label: string;
   text: string;

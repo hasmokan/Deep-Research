@@ -20,9 +20,14 @@ class _FakePrompt:
 
 class _FakeChain:
     response = SimpleNamespace(content="ok", additional_kwargs={})
+    stream_chunks = []
 
     async def ainvoke(self, payload):
         return self.response
+
+    async def astream(self, payload):
+        for chunk in self.stream_chunks:
+            yield chunk
 
 
 class LlmModelSettingsTests(TestCase):
@@ -65,6 +70,7 @@ class LlmModelSettingsTests(TestCase):
 class LlmNodeModelTests(TestCase):
     def setUp(self):
         _FakeChain.response = SimpleNamespace(content="ok", additional_kwargs={})
+        _FakeChain.stream_chunks = []
 
     def test_analyze_node_uses_configured_llm_model(self):
         from agents.nodes import analyze
@@ -126,6 +132,36 @@ class LlmNodeModelTests(TestCase):
 
         self.assertEqual(result["analysis"], "analysis answer")
         self.assertEqual(result["analysis_thinking"], "analysis thinking")
+
+    def test_stream_analyze_node_yields_reasoning_content_deltas(self):
+        from agents.nodes import analyze
+
+        _FakeChain.stream_chunks = [
+            SimpleNamespace(content="", additional_kwargs={"reasoning_content": "reading source"}),
+            SimpleNamespace(content="analysis answer", additional_kwargs={}),
+        ]
+        fake_settings = SimpleNamespace(
+            openai_api_key="api-key",
+            openai_base_url="https://api.example.test/v1",
+            llm_model=EXPECTED_MODEL,
+        )
+
+        with (
+            patch.object(analyze, "settings", fake_settings),
+            patch.object(analyze.ChatPromptTemplate, "from_messages", return_value=_FakePrompt()),
+            patch.object(analyze, "ChatOpenAI"),
+        ):
+            events = asyncio.run(_collect_async_events(analyze.stream_analyze_node({
+                "query": "test query",
+                "documents": [{"content": "test document", "similarity": 0.99}],
+            })))
+
+        self.assertEqual(events[0]["type"], "thinking")
+        self.assertEqual(events[0]["id"], "analysis-thinking")
+        self.assertEqual(events[0]["text"], "reading source")
+        self.assertEqual(events[1]["type"], "final")
+        self.assertEqual(events[1]["state"]["analysis"], "analysis answer")
+        self.assertEqual(events[1]["state"]["analysis_thinking"], "reading source")
 
     def test_generate_node_uses_configured_llm_model(self):
         from agents.nodes import generate
@@ -190,6 +226,37 @@ class LlmNodeModelTests(TestCase):
         self.assertEqual(result["report"], "# Final Report")
         self.assertEqual(result["report_thinking"], "report thinking")
 
+    def test_stream_generate_node_yields_reasoning_content_deltas(self):
+        from agents.nodes import generate
+
+        _FakeChain.stream_chunks = [
+            SimpleNamespace(content="", additional_kwargs={"reasoning_content": "planning report"}),
+            SimpleNamespace(content="# Final Report", additional_kwargs={}),
+        ]
+        fake_settings = SimpleNamespace(
+            openai_api_key="api-key",
+            openai_base_url="https://api.example.test/v1",
+            llm_model=EXPECTED_MODEL,
+        )
+
+        with (
+            patch.object(generate, "settings", fake_settings),
+            patch.object(generate.ChatPromptTemplate, "from_messages", return_value=_FakePrompt()),
+            patch.object(generate, "ChatOpenAI"),
+        ):
+            events = asyncio.run(_collect_async_events(generate.stream_generate_node({
+                "query": "test query",
+                "documents": [{"content": "test document"}],
+                "analysis": "test analysis",
+            })))
+
+        self.assertEqual(events[0]["type"], "thinking")
+        self.assertEqual(events[0]["id"], "report-thinking")
+        self.assertEqual(events[0]["text"], "planning report")
+        self.assertEqual(events[1]["type"], "final")
+        self.assertEqual(events[1]["state"]["report"], "# Final Report")
+        self.assertEqual(events[1]["state"]["report_thinking"], "planning report")
+
 
 class ResearchRouterThinkingTests(TestCase):
     def test_execute_research_returns_thinking_fields(self):
@@ -210,3 +277,7 @@ class ResearchRouterThinkingTests(TestCase):
 
         self.assertEqual(result["analysis_thinking"], "analysis thinking")
         self.assertEqual(result["report_thinking"], "report thinking")
+
+
+async def _collect_async_events(stream):
+    return [event async for event in stream]

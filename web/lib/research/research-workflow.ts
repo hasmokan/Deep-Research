@@ -133,7 +133,7 @@ export function buildResearchActivity(
   trace: ResearchStreamTrace[] = [],
 ): ResearchActivityEvent[] {
   if (trace.length > 0) {
-    return trace.map((event) => ({
+    const events: ResearchActivityEvent[] = trace.map((event) => ({
       id: event.id,
       stage: event.stage,
       kind: event.kind,
@@ -141,6 +141,25 @@ export function buildResearchActivity(
       detail: event.detail,
       documents: event.documents,
     }));
+
+    thinking.forEach((message, index) => {
+      const thinkingEvent: ResearchActivityEvent = {
+        id: `thinking-${index}-${message.stage}`,
+        stage: message.stage,
+        kind: 'thinking',
+        title: message.label,
+        detail: message.text,
+      };
+      const stageIndex = events.findLastIndex((event) => event.stage === message.stage);
+
+      if (stageIndex >= 0) {
+        events.splice(stageIndex + 1, 0, thinkingEvent);
+      } else {
+        events.push(thinkingEvent);
+      }
+    });
+
+    return events;
   }
 
   const events: ResearchActivityEvent[] = [];

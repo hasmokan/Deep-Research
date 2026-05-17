@@ -44,21 +44,43 @@ class ResearchStreamTests(TestCase):
             }
 
         async def fake_analyze_node(state):
-            return {
-                "analysis": "The source is useful.",
-                "analysis_completed": True,
+            yield {
+                "type": "thinking",
+                "id": "analysis-thinking",
+                "stage": "analyze",
+                "label": "Analysis thinking",
+                "text": "Reading the source.",
+            }
+            yield {
+                "type": "final",
+                "state": {
+                    "analysis": "The source is useful.",
+                    "analysis_thinking": "Reading the source.",
+                    "analysis_completed": True,
+                },
             }
 
         async def fake_generate_node(state):
-            return {
-                "report": "# Report\n\nThe source is useful.",
-                "report_completed": True,
+            yield {
+                "type": "thinking",
+                "id": "report-thinking",
+                "stage": "report",
+                "label": "Report thinking",
+                "text": "Drafting the report.",
+            }
+            yield {
+                "type": "final",
+                "state": {
+                    "report": "# Report\n\nThe source is useful.",
+                    "report_thinking": "Drafting the report.",
+                    "report_completed": True,
+                },
             }
 
         with (
             patch.object(research_stream, "web_search_node", fake_web_search_node),
-            patch.object(research_stream, "analyze_node", fake_analyze_node),
-            patch.object(research_stream, "generate_node", fake_generate_node),
+            patch.object(research_stream, "stream_analyze_node", fake_analyze_node),
+            patch.object(research_stream, "stream_generate_node", fake_generate_node),
         ):
             events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
 
@@ -73,6 +95,15 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(trace_payloads[1]["kind"], "tool_result")
         self.assertEqual(trace_payloads[1]["documents"][0]["title"], "Example Source")
         self.assertEqual(trace_payloads[1]["documents"][0]["url"], "https://example.com/source")
+        thinking_payloads = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: thinking")
+        ]
+        self.assertEqual(thinking_payloads[0]["id"], "analysis-thinking")
+        self.assertEqual(thinking_payloads[0]["text"], "Reading the source.")
+        self.assertEqual(thinking_payloads[1]["id"], "report-thinking")
+        self.assertEqual(thinking_payloads[1]["text"], "Drafting the report.")
 
     def test_stream_route_returns_text_event_stream(self):
         from agents.research_stream import format_sse_event

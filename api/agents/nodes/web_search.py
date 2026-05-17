@@ -3,7 +3,7 @@
 from typing import Any
 from urllib.parse import urlparse
 
-from services.web_search import get_web_search_service
+from agents.tools.web_search_tool import WebSearchTool
 
 
 async def web_search_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -16,23 +16,10 @@ async def web_search_node(state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Updated state with 'web_results' field
     """
-    web_search = get_web_search_service()
+    web_search = WebSearchTool()
     query = state["query"]
 
-    # Perform web search
-    web_results = await web_search.search(
-        query=query,
-        max_results=10
-    )
-
-    # Also search for news if relevant
-    news_results = await web_search.search_news(
-        query=query,
-        max_results=5
-    )
-
-    # Combine results
-    all_results = web_results + news_results
+    all_results = await web_search.search(query=query, max_results=15)
 
     # Convert to document format for consistency with vector search
     documents = []
@@ -49,6 +36,7 @@ async def web_search_node(state: dict[str, Any]) -> dict[str, Any]:
                 "source": source,
                 "provider": result.get("provider", "duckduckgo"),
                 "type": result.get("type", "web_search"),
+                "rank_score": (result.get("metadata") or {}).get("rank_score"),
             },
             "similarity": 1.0  # Web results are considered relevant
         })

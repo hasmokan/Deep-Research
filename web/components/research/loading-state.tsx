@@ -4,7 +4,7 @@
  * Agent trace component with live thinking progress.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Activity,
   Brain,
@@ -17,7 +17,6 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react';
-import { loadingThinkingMessages } from '@/lib/research/loading-thinking';
 import {
   buildResearchActivity,
   buildResearchActivityStream,
@@ -131,16 +130,8 @@ function shouldShowThinkingBlock(event: ResearchActivityEvent) {
   return event.kind === 'thinking' && event.detail.trim().length > 0;
 }
 
-function getFallbackStage(stage: string): ResearchActivityEvent['stage'] {
-  if (stage === 'search' || stage === 'analyze' || stage === 'report') {
-    return stage;
-  }
-  return 'analyze';
-}
-
 export function LoadingState({ activity }: LoadingStateProps = {}) {
   const store = useResearchStore();
-  const [tick, setTick] = useState(0);
   const [showOlderSteps, setShowOlderSteps] = useState(true);
   const streamStatuses = activity?.streamStatuses ?? store.streamStatuses;
   const streamThinking = activity?.streamThinking ?? store.streamThinking;
@@ -148,33 +139,10 @@ export function LoadingState({ activity }: LoadingStateProps = {}) {
   const streamTrace = activity?.streamTrace ?? store.streamTrace;
   const activityStatus = activity?.status ?? 'running';
   const streamActivity = buildResearchActivity(streamStatuses, streamThinking, streamDocuments, streamTrace);
-  const hasStreamActivity = streamActivity.length > 0;
-  const fallbackActivity: ResearchActivityEvent[] = loadingThinkingMessages.map((message) => ({
-    id: message.stage,
-    stage: getFallbackStage(message.stage),
-    kind: 'status',
-    title: message.label,
-    detail: message.text,
-  }));
-  const displayActivity = hasStreamActivity ? streamActivity : fallbackActivity;
-  const activityStream = buildResearchActivityStream(displayActivity, showOlderSteps);
+  const activityStream = buildResearchActivityStream(streamActivity, showOlderSteps);
   const visibleActivity = activityStream.visibleEvents;
-  const activeActivityIndex = hasStreamActivity
-    ? visibleActivity.length - 1
-    : Math.min(tick, visibleActivity.length - 1);
+  const activeActivityIndex = visibleActivity.length - 1;
   const hasHiddenSteps = activityStream.hiddenCount > 0;
-
-  useEffect(() => {
-    if (activityStatus !== 'running') {
-      return undefined;
-    }
-
-    const interval = window.setInterval(() => {
-      setTick((currentTick) => currentTick + 1);
-    }, 1800);
-
-    return () => window.clearInterval(interval);
-  }, [activityStatus]);
 
   return (
     <section className="w-full rounded-[10px] border border-border/70 bg-background/85 p-1 shadow-sm">
@@ -211,7 +179,12 @@ export function LoadingState({ activity }: LoadingStateProps = {}) {
       )}
 
       <div className="px-3 pb-3">
-        {visibleActivity.map((event, index) => {
+        {visibleActivity.length === 0 ? (
+          <div className="flex items-center gap-3 border-l border-border/80 py-3 pl-3 text-sm text-muted-foreground">
+            <Activity className="h-4 w-4" />
+            Waiting for backend agent events...
+          </div>
+        ) : visibleActivity.map((event, index) => {
           const status = getActivityDisplayStatus(index, activeActivityIndex, activityStatus);
           const Icon = getEventIcon(event);
           const isLast = index === visibleActivity.length - 1;

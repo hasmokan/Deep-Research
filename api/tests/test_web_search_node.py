@@ -9,7 +9,7 @@ class WebSearchNodeTests(TestCase):
     def test_web_search_node_preserves_titles_and_provider_metadata(self):
         from agents.nodes import web_search
 
-        class FakeSearchService:
+        class FakeSearchTool:
             async def search(self, query, max_results=10):
                 return [
                     {
@@ -20,10 +20,7 @@ class WebSearchNodeTests(TestCase):
                     }
                 ]
 
-            async def search_news(self, query, max_results=5):
-                return []
-
-        with patch.object(web_search, "get_web_search_service", return_value=FakeSearchService()):
+        with patch.object(web_search, "WebSearchTool", return_value=FakeSearchTool()):
             result = asyncio.run(web_search.web_search_node({"query": "example"}))
 
         document = result["documents"][0]

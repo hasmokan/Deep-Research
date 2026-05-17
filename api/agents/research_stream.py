@@ -6,14 +6,14 @@ import asyncio
 import json
 from typing import Any, AsyncIterator
 
-from agents.nodes.analyze import analyze_node
+from agents.nodes.analyze import stream_analyze_node
 from agents.nodes.conversation_router import (
     answer_from_artifact_node,
     answer_sources_node,
     classify_research_intent_node,
     route_research_intent,
 )
-from agents.nodes.generate import generate_node
+from agents.nodes.generate import stream_generate_node
 from agents.nodes.web_search import web_search_node
 from services.research_runs import JsonlResearchRunStore
 
@@ -137,7 +137,12 @@ async def stream_research_events(
             if state.get("report_thinking"):
                 yield record_event(
                     "thinking",
-                    {"stage": "report", "label": "Answer thinking", "text": state["report_thinking"]},
+                    {
+                        "id": "answer-thinking",
+                        "stage": "report",
+                        "label": "Answer thinking",
+                        "text": state["report_thinking"],
+                    },
                 )
                 await asyncio.sleep(0)
             yield record_event("answer", {"answer": state.get("answer")})
@@ -214,13 +219,12 @@ async def stream_research_events(
             ),
         )
         await asyncio.sleep(0)
-        state.update(await analyze_node(state))
-        if state.get("analysis_thinking"):
-            yield record_event(
-                "thinking",
-                {"stage": "analyze", "label": "Analysis thinking", "text": state["analysis_thinking"]},
-            )
-            await asyncio.sleep(0)
+        async for analysis_event in stream_analyze_node(state):
+            if analysis_event.get("type") == "thinking":
+                yield record_event("thinking", _thinking_payload(analysis_event))
+                await asyncio.sleep(0)
+            elif analysis_event.get("type") == "final":
+                state.update(analysis_event.get("state", {}))
         yield record_event("analysis", {"analysis": state.get("analysis")})
         await asyncio.sleep(0)
 
@@ -243,13 +247,12 @@ async def stream_research_events(
             ),
         )
         await asyncio.sleep(0)
-        state.update(await generate_node(state))
-        if state.get("report_thinking"):
-            yield record_event(
-                "thinking",
-                {"stage": "report", "label": "Report thinking", "text": state["report_thinking"]},
-            )
-            await asyncio.sleep(0)
+        async for report_event in stream_generate_node(state):
+            if report_event.get("type") == "thinking":
+                yield record_event("thinking", _thinking_payload(report_event))
+                await asyncio.sleep(0)
+            elif report_event.get("type") == "final":
+                state.update(report_event.get("state", {}))
         yield record_event("report", {"report": state.get("report")})
         await asyncio.sleep(0)
         yield record_event("complete", _result_payload(state))
@@ -272,4 +275,13 @@ def _result_payload(state: dict[str, Any]) -> dict[str, Any]:
         "answer": state.get("answer"),
         "result_type": state.get("result_type") or "report",
         "status": "completed" if state.get("report_completed") else "failed",
+    }
+
+
+def _thinking_payload(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": event.get("id") or f"{event.get('stage', 'report')}-thinking",
+        "stage": event.get("stage"),
+        "label": event.get("label") or "Thinking",
+        "text": event.get("text") or "",
     }

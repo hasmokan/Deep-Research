@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  appendResearchActivityThinking,
   appendResearchActivityStatus,
   appendResearchActivityDocuments,
   applyResearchRunToActivityMessage,
@@ -125,6 +126,41 @@ test('assistant research activity messages keep streamed source documents', () =
   assert.equal(updatedMessage.researchActivity?.streamDocuments.length, 1);
   assert.equal(updatedMessage.researchActivity?.streamDocuments[0]?.metadata.title, '青稞报告');
   assert.equal(updatedMessage.researchActivity?.updatedAt, '2026-05-16T10:01:00.000Z');
+});
+
+test('assistant research activity thinking deltas update the same trace entry', () => {
+  const activityMessage = createAssistantResearchActivityMessage('青稞市场占有率', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const firstUpdate = appendResearchActivityThinking(
+    activityMessage,
+    {
+      id: 'analysis-thinking',
+      stage: 'analyze',
+      label: 'Analysis thinking',
+      text: 'Reading source one.',
+    },
+    '2026-05-16T10:01:00.000Z',
+  );
+  const secondUpdate = appendResearchActivityThinking(
+    firstUpdate,
+    {
+      id: 'analysis-thinking',
+      stage: 'analyze',
+      label: 'Analysis thinking',
+      text: 'Reading source one. Comparing source two.',
+    },
+    '2026-05-16T10:01:01.000Z',
+  );
+
+  assert.equal(secondUpdate.researchActivity?.streamThinking.length, 1);
+  assert.equal(
+    secondUpdate.researchActivity?.streamThinking[0]?.text,
+    'Reading source one. Comparing source two.',
+  );
+  assert.equal(secondUpdate.researchActivity?.updatedAt, '2026-05-16T10:01:01.000Z');
 });
 
 test('research activity stores backend run id for later restoration', () => {

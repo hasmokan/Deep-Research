@@ -15,7 +15,11 @@ class WebSearchService:
         self,
         query: str,
         max_results: int = 10,
-        region: str = "wt-wt"  # Worldwide
+        region: str = "wt-wt",  # Worldwide
+        safesearch: str = "moderate",
+        timelimit: str | None = None,
+        backend: str = "auto",
+        page: int = 1,
     ) -> List[Dict[str, Any]]:
         """
         Perform a web search using DuckDuckGo
@@ -24,6 +28,10 @@ class WebSearchService:
             query: Search query string
             max_results: Maximum number of results to return
             region: Region for search results (wt-wt = worldwide)
+            safesearch: Safe search setting (on, moderate, off)
+            timelimit: Optional time filter (d, w, m, y)
+            backend: DDGS backend selection
+            page: Result page number
 
         Returns:
             List of search results with title, url, and body
@@ -33,7 +41,11 @@ class WebSearchService:
                 lambda: list(self.ddgs.text(
                     query,
                     region=region,
-                    max_results=max_results
+                    safesearch=safesearch,
+                    timelimit=timelimit,
+                    max_results=max_results,
+                    backend=backend,
+                    page=page,
                 ))
             )
 
@@ -59,7 +71,11 @@ class WebSearchService:
         self,
         query: str,
         max_results: int = 10,
-        region: str = "wt-wt"
+        region: str = "wt-wt",
+        safesearch: str = "moderate",
+        timelimit: str | None = None,
+        backend: str = "auto",
+        page: int = 1,
     ) -> List[Dict[str, Any]]:
         """
         Search for news articles using DuckDuckGo
@@ -68,6 +84,10 @@ class WebSearchService:
             query: Search query string
             max_results: Maximum number of results
             region: Region for news results
+            safesearch: Safe search setting (on, moderate, off)
+            timelimit: Optional time filter (d, w, m)
+            backend: DDGS backend selection
+            page: Result page number
 
         Returns:
             List of news results
@@ -77,7 +97,11 @@ class WebSearchService:
                 lambda: list(self.ddgs.news(
                     query,
                     region=region,
-                    max_results=max_results
+                    safesearch=safesearch,
+                    timelimit=timelimit,
+                    max_results=max_results,
+                    backend=backend,
+                    page=page,
                 ))
             )
 

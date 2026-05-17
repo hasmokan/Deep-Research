@@ -111,6 +111,26 @@ function isResearchStreamThinking(value: unknown): value is ResearchStreamThinki
   );
 }
 
+function getThinkingKey(thinking: ResearchStreamThinking) {
+  return thinking.id ?? `${thinking.stage}:${thinking.label}`;
+}
+
+function upsertThinking(
+  thinkingMessages: ResearchStreamThinking[],
+  thinking: ResearchStreamThinking,
+) {
+  const key = getThinkingKey(thinking);
+  const existingIndex = thinkingMessages.findIndex((message) => getThinkingKey(message) === key);
+
+  if (existingIndex === -1) {
+    return [...thinkingMessages, thinking];
+  }
+
+  return thinkingMessages.map((message, index) => (
+    index === existingIndex ? thinking : message
+  ));
+}
+
 function isResearchDocumentArray(value: unknown): value is Document[] {
   if (!Array.isArray(value)) {
     return false;
@@ -265,7 +285,7 @@ export function appendResearchActivityThinking(
     researchActivity: {
       ...message.researchActivity,
       status: 'running',
-      streamThinking: [...message.researchActivity.streamThinking, thinking],
+      streamThinking: upsertThinking(message.researchActivity.streamThinking, thinking),
       updatedAt: now,
     },
   };

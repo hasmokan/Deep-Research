@@ -56,7 +56,7 @@ export const useResearchStore = create<ResearchState>((set) => ({
     streamStatuses: [...state.streamStatuses, status],
   })),
   addStreamThinking: (thinking) => set((state) => ({
-    streamThinking: [...state.streamThinking, thinking],
+    streamThinking: upsertThinking(state.streamThinking, thinking),
   })),
   setStreamDocuments: (documents) => set({ streamDocuments: documents }),
   addStreamTrace: (trace) => set((state) => ({
@@ -73,3 +73,23 @@ export const useResearchStore = create<ResearchState>((set) => ({
     streamTrace: [],
   }),
 }));
+
+function getThinkingKey(thinking: ResearchStreamThinking) {
+  return thinking.id ?? `${thinking.stage}:${thinking.label}`;
+}
+
+function upsertThinking(
+  thinkingMessages: ResearchStreamThinking[],
+  thinking: ResearchStreamThinking,
+) {
+  const key = getThinkingKey(thinking);
+  const existingIndex = thinkingMessages.findIndex((message) => getThinkingKey(message) === key);
+
+  if (existingIndex === -1) {
+    return [...thinkingMessages, thinking];
+  }
+
+  return thinkingMessages.map((message, index) => (
+    index === existingIndex ? thinking : message
+  ));
+}
