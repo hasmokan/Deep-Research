@@ -11,6 +11,9 @@ langchain-openai==0.2.13
 openai==1.59.8
 langfuse>=3.0.0,<4.0.0
 
+# Web search
+ddgs==9.14.4
+
 # Database
 supabase==2.30.0
 httpx==0.28.1
