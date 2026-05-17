@@ -10,8 +10,6 @@ import type {
   ResearchResponse,
   ResearchResult,
   ResearchRun,
-  ResearchThread,
-  ResearchThreadUpdate,
   ResearchStreamHandlers,
 } from './types';
 
@@ -110,21 +108,6 @@ export class ApiClient {
 
   async getResearchRun(runId: string): Promise<ResearchRun> {
     return this.request<ResearchRun>(`/api/research/runs/${encodeURIComponent(runId)}`);
-  }
-
-  async listResearchThreads(): Promise<ResearchThread[]> {
-    return this.request<ResearchThread[]>('/api/research/threads');
-  }
-
-  async getResearchThread(threadId: string): Promise<ResearchThread> {
-    return this.request<ResearchThread>(`/api/research/threads/${encodeURIComponent(threadId)}`);
-  }
-
-  async saveResearchThread(threadId: string, update: ResearchThreadUpdate): Promise<ResearchThread> {
-    return this.request<ResearchThread>(`/api/research/threads/${encodeURIComponent(threadId)}`, {
-      method: 'PUT',
-      body: JSON.stringify(update),
-    });
   }
 
   /**

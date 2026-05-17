@@ -54,30 +54,22 @@ class ResearchThreadStoreTests(TestCase):
 
 
 class ResearchThreadRouteTests(TestCase):
-    def test_thread_routes_save_and_return_thread(self):
-        from routers import research
-
+    def test_thread_routes_are_disabled_for_browser_local_storage_only(self):
         client = TestClient(app)
 
-        with TemporaryDirectory() as tmpdir:
-            from services.research_threads import JsonResearchThreadStore
+        save_response = client.put(
+            "/api/research/threads/thread-1",
+            json={
+                "title": "青稞市场",
+                "messages": [{"role": "user", "content": "查青稞"}],
+            },
+        )
+        get_response = client.get("/api/research/threads/thread-1")
+        list_response = client.get("/api/research/threads")
 
-            store = JsonResearchThreadStore(tmpdir)
-            with patch.object(research, "research_thread_store", store):
-                save_response = client.put(
-                    "/api/research/threads/thread-1",
-                    json={
-                        "title": "青稞市场",
-                        "messages": [{"role": "user", "content": "查青稞"}],
-                    },
-                )
-                get_response = client.get("/api/research/threads/thread-1")
-                list_response = client.get("/api/research/threads")
-
-        self.assertEqual(save_response.status_code, 200)
-        self.assertEqual(get_response.status_code, 200)
-        self.assertEqual(get_response.json()["title"], "青稞市场")
-        self.assertEqual(list_response.json()[0]["thread_id"], "thread-1")
+        self.assertEqual(save_response.status_code, 410)
+        self.assertEqual(get_response.status_code, 410)
+        self.assertEqual(list_response.status_code, 410)
 
 
 class FakeSupabaseResponse:

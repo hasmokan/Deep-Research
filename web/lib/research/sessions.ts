@@ -17,6 +17,12 @@ export interface ResearchSessionSnapshot {
   sessions: ResearchSession[];
 }
 
+export interface LocalResearchSessionState {
+  activeSessionId: string | null;
+  activeSession: ResearchSession | null;
+  sessions: ResearchSession[];
+}
+
 interface CreateResearchSessionOptions {
   id?: string;
   now?: string;
@@ -72,6 +78,24 @@ function sortSessionsByActivity(sessions: ResearchSession[]) {
   return [...sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
+function stopRestoredRunningResearchActivityMessage(
+  message: ConversationMessage,
+  stoppedAt: string,
+): ConversationMessage {
+  if (message.researchActivity?.status !== 'running') {
+    return message;
+  }
+
+  return {
+    ...message,
+    researchActivity: {
+      ...message.researchActivity,
+      status: 'stopped',
+      updatedAt: stoppedAt,
+    },
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -87,19 +111,6 @@ function isResearchSession(value: unknown): value is ResearchSession {
     Array.isArray(value.messages) &&
     typeof value.createdAt === 'string' &&
     typeof value.updatedAt === 'string'
-  );
-}
-
-function isConversationMessage(value: unknown): value is ConversationMessage {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    typeof value.id === 'string' &&
-    (value.role === 'user' || value.role === 'assistant') &&
-    typeof value.content === 'string' &&
-    typeof value.createdAt === 'string'
   );
 }
 
@@ -127,25 +138,6 @@ export function updateResearchSessionMessages(
     messages,
     latestResult: getLatestResult(messages),
     updatedAt: now,
-  };
-}
-
-export function createResearchSessionFromServerThread(thread: {
-  thread_id: string;
-  title: string;
-  messages: unknown[];
-  created_at: string;
-  updated_at: string;
-}): ResearchSession {
-  const messages = thread.messages.filter(isConversationMessage);
-
-  return {
-    id: thread.thread_id,
-    title: thread.title || getSessionTitle(messages),
-    messages,
-    latestResult: getLatestResult(messages),
-    createdAt: thread.created_at,
-    updatedAt: thread.updated_at,
   };
 }
 
@@ -180,6 +172,38 @@ export function loadResearchSessionSnapshot(storage: SessionStorageLike): Resear
   } catch {
     return EMPTY_SNAPSHOT;
   }
+}
+
+export function restoreLocalResearchSessionState(storage: SessionStorageLike): LocalResearchSessionState {
+  const snapshot = loadResearchSessionSnapshot(storage);
+
+  if (!snapshot.sessions.length) {
+    return {
+      activeSessionId: null,
+      activeSession: null,
+      sessions: [],
+    };
+  }
+
+  const restoredSessions = snapshot.sessions.map((session) => ({
+    ...session,
+    messages: session.messages.map((message) => (
+      message.researchActivity?.status === 'running' && message.researchActivity.runId
+        ? message
+        : stopRestoredRunningResearchActivityMessage(message, session.updatedAt)
+    )),
+  }));
+  const activeSessionId = snapshot.activeSessionId
+    && restoredSessions.some((session) => session.id === snapshot.activeSessionId)
+    ? snapshot.activeSessionId
+    : restoredSessions[0]?.id ?? null;
+  const activeSession = restoredSessions.find((session) => session.id === activeSessionId) ?? null;
+
+  return {
+    activeSessionId,
+    activeSession,
+    sessions: restoredSessions,
+  };
 }
 
 export function saveResearchSessionSnapshot(

@@ -61,6 +61,45 @@ class ResearchPlanRouteTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {**generated_plan, "should_plan": True})
 
+    def test_plan_endpoint_does_not_persist_thread_snapshots(self):
+        client = TestClient(app)
+        generated_plan = {
+            "query": "Compare AI search products",
+            "source_label": "Public web",
+            "summary": "Compare AI search products by source coverage, UX, and report quality.",
+            "steps": [],
+        }
+
+        class DisabledThreadStore:
+            def upsert_thread(self, *_args, **_kwargs):
+                raise AssertionError("plan generation must not persist server-side threads")
+
+        async def fake_generate_research_plan(query: str):
+            self.assertEqual(query, "Compare AI search products")
+            return generated_plan
+
+        with (
+            patch("routers.research.research_thread_store", DisabledThreadStore(), create=True),
+            patch(
+                "routers.research.assess_research_plan_need",
+                return_value={"should_plan": True, "reason": "Broad research task."},
+            ),
+            patch(
+                "routers.research.generate_research_plan",
+                side_effect=fake_generate_research_plan,
+            ),
+        ):
+            response = client.post(
+                "/api/research/plan",
+                json={
+                    "query": "Compare AI search products",
+                    "thread_id": "session-local-only",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {**generated_plan, "should_plan": True})
+
     def test_plan_stream_endpoint_emits_status_plan_and_complete_events(self):
         client = TestClient(app)
         generated_plan = {

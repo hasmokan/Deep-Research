@@ -25,7 +25,6 @@ import {
   createAssistantResearchActivityMessage,
   createUserMessage,
   setResearchActivityRunId,
-  stopRunningResearchActivityMessage,
   type ConversationMessage,
   updateResearchActivityMessageStatus,
 } from '@/lib/research/conversation';
@@ -38,8 +37,7 @@ import {
 } from '@/lib/research/research-workflow';
 import {
   createResearchSession,
-  createResearchSessionFromServerThread,
-  loadResearchSessionSnapshot,
+  restoreLocalResearchSessionState,
   saveResearchSessionSnapshot,
   updateResearchSessionMessages,
   upsertResearchSession,
@@ -192,58 +190,11 @@ export default function Home() {
   });
 
   useEffect(() => {
-    let cancelled = false;
-    const snapshot = loadResearchSessionSnapshot(window.localStorage);
-
-    const loadServerThreads = async () => {
-      try {
-        const serverThreads = await apiClient.listResearchThreads();
-        if (cancelled || !serverThreads.length) {
-          setHasLoadedSessions(true);
-          return;
-        }
-
-        const serverSessions = serverThreads.map(createResearchSessionFromServerThread);
-        const nextActiveSessionId = serverSessions[0]?.id ?? null;
-        const activeSession = serverSessions[0] ?? null;
-
-        sessionsRef.current = serverSessions;
-        activeSessionIdRef.current = nextActiveSessionId;
-        messagesRef.current = activeSession?.messages ?? [];
-        setSessions(serverSessions);
-        setActiveSessionId(nextActiveSessionId);
-        setMessages(activeSession?.messages ?? []);
-        setQuery(activeSession?.title === 'New chat' ? '' : activeSession?.title ?? '');
-        setResult(activeSession?.latestResult ?? null);
-        setDeepResearchMode(!activeSession?.latestResult);
-        setHasLoadedSessions(true);
-      } catch {
-        if (!cancelled) {
-          setHasLoadedSessions(true);
-        }
-      }
-    };
-
-    if (!snapshot.sessions.length) {
-      void loadServerThreads();
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const restoredSessions = snapshot.sessions.map((session) => ({
-      ...session,
-      messages: session.messages.map((message) => (
-        message.researchActivity?.status === 'running' && message.researchActivity.runId
-          ? message
-          : stopRunningResearchActivityMessage(message, session.updatedAt)
-      )),
-    }));
-    const nextActiveSessionId = snapshot.activeSessionId
-      && restoredSessions.some((session) => session.id === snapshot.activeSessionId)
-      ? snapshot.activeSessionId
-      : restoredSessions[0]?.id ?? null;
-    const activeSession = restoredSessions.find((session) => session.id === nextActiveSessionId) ?? null;
+    const {
+      activeSession,
+      activeSessionId: nextActiveSessionId,
+      sessions: restoredSessions,
+    } = restoreLocalResearchSessionState(window.localStorage);
 
     sessionsRef.current = restoredSessions;
     activeSessionIdRef.current = nextActiveSessionId;
@@ -255,10 +206,6 @@ export default function Home() {
     setResult(activeSession?.latestResult ?? null);
     setDeepResearchMode(!activeSession?.latestResult);
     setHasLoadedSessions(true);
-
-    return () => {
-      cancelled = true;
-    };
   }, [setQuery, setResult]);
 
   useEffect(() => {
@@ -307,10 +254,6 @@ export default function Home() {
 
     sessionsRef.current = nextSessions;
     setSessions(nextSessions);
-    void apiClient.saveResearchThread(updatedSession.id, {
-      title: updatedSession.title,
-      messages: updatedSession.messages as unknown as Record<string, unknown>[],
-    }).catch(() => undefined);
   }, []);
 
   const saveActiveSessionMessages = (nextMessages: ConversationMessage[]) => {

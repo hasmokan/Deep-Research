@@ -11,7 +11,7 @@ class ResearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500, description="Research query")
     thread_id: Optional[str] = Field(
         default=None,
-        description="Conversation thread identifier for server-side persistence",
+        description="Browser-local conversation identifier used for run context",
     )
     messages: list[ConversationMessage] = Field(
         default_factory=list,
@@ -53,11 +53,6 @@ class ResearchPlanResponse(BaseModel):
     summary: str
     steps: list[ResearchPlanStep]
     should_plan: bool = True
-
-
-class ResearchThreadUpdate(BaseModel):
-    title: str = Field(default="New chat", max_length=200)
-    messages: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DocumentResponse(BaseModel):

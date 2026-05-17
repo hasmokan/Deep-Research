@@ -1,17 +1,16 @@
-export const chatSidebarRecents = [
-  'Eating Habits Analysis',
-  'Translate German to English',
-  'Noodle observation',
-  'Noodles boiling observation',
-  'Greeting conversation',
-  'Meeting planning assistance',
-  '面试准备建议',
-  '总结面试回答不足',
-  '面试经验总结',
-  '哈希表原理解析',
-  'HTTP 八股文解析',
-  'Gstack与Superpowers对比',
-];
+export interface ChatSidebarSessionItem {
+  id: string;
+  title: string;
+}
+
+export function getVisibleChatSidebarItems(
+  sessions: ChatSidebarSessionItem[],
+): ChatSidebarSessionItem[] {
+  return sessions.map((session) => ({
+    id: session.id,
+    title: session.title,
+  }));
+}
 
 export function createConversationTitle(prompt: string) {
   const normalizedPrompt = prompt.trim().replace(/\s+/g, ' ');

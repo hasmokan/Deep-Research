@@ -65,19 +65,6 @@ export interface ResearchRun {
   events: ResearchRunEvent[];
 }
 
-export interface ResearchThread {
-  thread_id: string;
-  title: string;
-  messages: unknown[];
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ResearchThreadUpdate {
-  title: string;
-  messages: Record<string, unknown>[];
-}
-
 export interface ResearchStreamMetadata {
   run_id: string;
 }

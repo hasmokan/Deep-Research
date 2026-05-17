@@ -2,14 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  chatSidebarRecents,
   createConversationTitle,
+  getVisibleChatSidebarItems,
 } from './chat-shell.ts';
 
-test('chatSidebarRecents provides a focused research-first recent list', () => {
-  assert.ok(chatSidebarRecents.length >= 6);
-  assert.equal(chatSidebarRecents[0], 'Eating Habits Analysis');
-  assert.ok(chatSidebarRecents.includes('Gstack与Superpowers对比'));
+test('getVisibleChatSidebarItems only exposes real saved sessions', () => {
+  const items = getVisibleChatSidebarItems([
+    { id: 'session-1', title: '阿里巴巴是什么' },
+    { id: 'session-2', title: 'New chat' },
+  ]);
+
+  assert.deepEqual(items, [
+    { id: 'session-1', title: '阿里巴巴是什么' },
+    { id: 'session-2', title: 'New chat' },
+  ]);
 });
 
 test('createConversationTitle shortens long prompts for the sidebar', () => {

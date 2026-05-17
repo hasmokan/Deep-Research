@@ -2,13 +2,12 @@
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from models.schemas import DocumentResponse, ResearchPlanResponse, ResearchRequest, ResearchResponse, ResearchThreadUpdate
+from models.schemas import DocumentResponse, ResearchPlanResponse, ResearchRequest, ResearchResponse
 from agents.research_agent import research_agent
 from agents.research_stream import stream_research_events
 from agents.conversation_context import build_contextual_research_query
 from agents.nodes.plan import assess_research_plan_need, generate_research_plan
 from services.research_runs import research_run_store
-from services.research_threads import research_thread_store
 from services.vector_store import get_vector_store
 from datetime import datetime
 import json
@@ -17,18 +16,18 @@ import uuid
 router = APIRouter(prefix="/api/research", tags=["research"])
 
 
+def _raise_thread_persistence_disabled() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail="Server-side research thread persistence is disabled. Conversation history is stored in browser localStorage.",
+    )
+
+
 @router.post("/plan", response_model=ResearchPlanResponse)
 async def create_research_plan(request: ResearchRequest):
     """
     Generate a query-specific research plan before the full research run.
     """
-    if request.thread_id:
-        research_thread_store.upsert_thread(
-            request.thread_id,
-            title=request.query,
-            messages=[message.model_dump() for message in request.messages],
-        )
-
     try:
         has_follow_up_context = bool(request.messages) or bool(request.latest_result)
 
@@ -60,13 +59,6 @@ async def stream_research_plan(request: ResearchRequest):
     """
     Generate a query-specific research plan and stream plan progress as SSE.
     """
-    if request.thread_id:
-        research_thread_store.upsert_thread(
-            request.thread_id,
-            title=request.query,
-            messages=[message.model_dump() for message in request.messages],
-        )
-
     async def events():
         try:
             yield _format_sse_event(
@@ -210,35 +202,20 @@ async def get_research_run(run_id: str):
 
 @router.get("/threads")
 async def list_research_threads():
-    """Return persisted conversation threads, newest first."""
-    return research_thread_store.list_threads()
+    """Server-side conversation thread persistence is disabled."""
+    _raise_thread_persistence_disabled()
 
 
 @router.get("/threads/{thread_id}")
 async def get_research_thread(thread_id: str):
-    """Return one persisted conversation thread."""
-    try:
-        thread = research_thread_store.get_thread(thread_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if thread is None:
-        raise HTTPException(status_code=404, detail=f"Research thread {thread_id} not found")
-
-    return thread
+    """Server-side conversation thread persistence is disabled."""
+    _raise_thread_persistence_disabled()
 
 
 @router.put("/threads/{thread_id}")
-async def save_research_thread(thread_id: str, request: ResearchThreadUpdate):
-    """Create or replace a persisted conversation thread snapshot."""
-    try:
-        return research_thread_store.upsert_thread(
-            thread_id,
-            title=request.title,
-            messages=request.messages,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+async def save_research_thread(thread_id: str):
+    """Server-side conversation thread persistence is disabled."""
+    _raise_thread_persistence_disabled()
 
 
 @router.post("/", response_model=ResearchResponse)
