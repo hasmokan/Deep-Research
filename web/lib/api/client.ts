@@ -11,15 +11,37 @@ import type {
   ResearchResult,
   ResearchRun,
   ResearchStreamHandlers,
+  ResearchThread,
+  ResearchThreadUpdate,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export class ApiClient {
   private baseUrl: string;
+  private accessTokenProvider: (() => string | null | undefined) | null = null;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
+  }
+
+  setAccessTokenProvider(provider: (() => string | null | undefined) | null) {
+    this.accessTokenProvider = provider;
+  }
+
+  private headers(headers?: HeadersInit): Headers {
+    const nextHeaders = new Headers(headers);
+
+    if (!nextHeaders.has('Content-Type')) {
+      nextHeaders.set('Content-Type', 'application/json');
+    }
+
+    const token = this.accessTokenProvider?.();
+    if (token && !nextHeaders.has('Authorization')) {
+      nextHeaders.set('Authorization', `Bearer ${token}`);
+    }
+
+    return nextHeaders;
   }
 
   private async request<T>(
@@ -30,10 +52,7 @@ export class ApiClient {
 
     const response = await fetch(url, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
+      headers: this.headers(options?.headers),
     });
 
     if (!response.ok) {
@@ -75,9 +94,7 @@ export class ApiClient {
   ): Promise<ResearchPlanResponse> {
     const response = await fetch(`${this.baseUrl}/api/research/plan/stream`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: this.headers(),
       body: JSON.stringify(request),
       signal: handlers.signal,
     });
@@ -110,6 +127,21 @@ export class ApiClient {
     return this.request<ResearchRun>(`/api/research/runs/${encodeURIComponent(runId)}`);
   }
 
+  async listResearchThreads(): Promise<ResearchThread[]> {
+    return this.request<ResearchThread[]>('/api/research/threads');
+  }
+
+  async getResearchThread(threadId: string): Promise<ResearchThread> {
+    return this.request<ResearchThread>(`/api/research/threads/${encodeURIComponent(threadId)}`);
+  }
+
+  async saveResearchThread(threadId: string, thread: ResearchThreadUpdate): Promise<ResearchThread> {
+    return this.request<ResearchThread>(`/api/research/threads/${encodeURIComponent(threadId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(thread),
+    });
+  }
+
   /**
    * Execute research and stream progress with Server-Sent Events
    */
@@ -119,9 +151,7 @@ export class ApiClient {
   ): Promise<ResearchResult> {
     const response = await fetch(`${this.baseUrl}/api/research/stream`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: this.headers(),
       body: JSON.stringify(request),
       signal: handlers.signal,
     });

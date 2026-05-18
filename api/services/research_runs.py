@@ -26,7 +26,7 @@ class JsonlResearchRunStore:
         self.base_dir = Path(base_dir or os.getenv("RESEARCH_RUNS_DIR") or default_dir)
         self._lock = threading.Lock()
 
-    def create_run(self, query: str) -> dict[str, Any]:
+    def create_run(self, query: str, user_id: str) -> dict[str, Any]:
         run_id = f"run-{uuid.uuid4()}"
         timestamp = self._now()
         self.append_event(
@@ -34,6 +34,7 @@ class JsonlResearchRunStore:
             "metadata",
             {
                 "run_id": run_id,
+                "user_id": user_id,
                 "query": query,
                 "status": "running",
                 "created_at": timestamp,
@@ -42,6 +43,7 @@ class JsonlResearchRunStore:
         )
         return {
             "run_id": run_id,
+            "user_id": user_id,
             "query": query,
             "status": "running",
             "created_at": timestamp,
@@ -74,7 +76,7 @@ class JsonlResearchRunStore:
 
         return record
 
-    def get_run(self, run_id: str) -> dict[str, Any] | None:
+    def get_run(self, run_id: str, user_id: str) -> dict[str, Any] | None:
         path = self._run_file(run_id)
         if not path.exists():
             return None
@@ -85,10 +87,13 @@ class JsonlResearchRunStore:
 
         metadata = next((event for event in events if event.get("event") == "metadata"), events[0])
         metadata_data = metadata.get("data") if isinstance(metadata.get("data"), dict) else {}
+        if metadata_data.get("user_id") != user_id:
+            return None
         status = self._derive_status(events)
 
         return {
             "run_id": run_id,
+            "user_id": user_id,
             "query": metadata_data.get("query", ""),
             "status": status,
             "created_at": metadata_data.get("created_at") or events[0].get("created_at"),
@@ -147,11 +152,12 @@ class SupabaseResearchRunStore:
     def __init__(self, client: Client | None = None):
         self.supabase = client or _create_supabase_client()
 
-    def create_run(self, query: str) -> dict[str, Any]:
+    def create_run(self, query: str, user_id: str) -> dict[str, Any]:
         run_id = f"run-{uuid.uuid4()}"
         timestamp = _now()
         run = {
             "run_id": run_id,
+            "user_id": user_id,
             "query": query,
             "status": "running",
             "created_at": timestamp,
@@ -163,6 +169,7 @@ class SupabaseResearchRunStore:
             "metadata",
             {
                 "run_id": run_id,
+                "user_id": user_id,
                 "query": query,
                 "status": "running",
                 "created_at": timestamp,
@@ -194,13 +201,14 @@ class SupabaseResearchRunStore:
         self._touch_run(run_id, event, timestamp, data)
         return saved_record
 
-    def get_run(self, run_id: str) -> dict[str, Any] | None:
+    def get_run(self, run_id: str, user_id: str) -> dict[str, Any] | None:
         _validate_run_id(run_id)
         run_response = (
             self.supabase
             .table("research_runs")
             .select("*")
             .eq("run_id", run_id)
+            .eq("user_id", user_id)
             .limit(1)
             .execute()
         )
@@ -226,6 +234,7 @@ class SupabaseResearchRunStore:
 
         return {
             "run_id": run_id,
+            "user_id": user_id,
             "query": run.get("query") or metadata_data.get("query", ""),
             "status": status,
             "created_at": run.get("created_at") or metadata_data.get("created_at") or events[0].get("created_at"),

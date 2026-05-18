@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from main import app
+from services.auth import AuthenticatedUser, get_current_user
 
 
 class ResearchThreadStoreTests(TestCase):
@@ -17,19 +18,27 @@ class ResearchThreadStoreTests(TestCase):
             store = JsonResearchThreadStore(tmpdir)
 
             thread = store.upsert_thread(
+                "user-1",
                 "thread-1",
                 title="青稞市场",
                 messages=[{"role": "user", "content": "查青稞"}],
             )
-            restored = store.get_thread("thread-1")
-            threads = store.list_threads()
+            store.upsert_thread(
+                "user-2",
+                "thread-2",
+                title="竞品分析",
+                messages=[{"role": "user", "content": "查竞品"}],
+            )
+            restored = store.get_thread("user-1", "thread-1")
+            threads = store.list_threads("user-1")
 
         self.assertEqual(thread["thread_id"], "thread-1")
+        self.assertEqual(thread["user_id"], "user-1")
         self.assertIsNotNone(restored)
         assert restored is not None
         self.assertEqual(restored["title"], "青稞市场")
         self.assertEqual(restored["messages"][0]["content"], "查青稞")
-        self.assertEqual(threads[0]["thread_id"], "thread-1")
+        self.assertEqual([item["thread_id"] for item in threads], ["thread-1"])
 
     def test_supabase_store_upserts_and_lists_threads(self):
         from services.research_threads import SupabaseResearchThreadStore
@@ -38,38 +47,66 @@ class ResearchThreadStoreTests(TestCase):
         store = SupabaseResearchThreadStore(client)
 
         thread = store.upsert_thread(
+            "user-1",
             "thread-1",
             title="青稞市场",
             messages=[{"role": "user", "content": "查青稞"}],
         )
-        restored = store.get_thread("thread-1")
-        threads = store.list_threads()
+        store.upsert_thread(
+            "user-2",
+            "thread-2",
+            title="竞品分析",
+            messages=[{"role": "user", "content": "查竞品"}],
+        )
+        restored = store.get_thread("user-1", "thread-1")
+        threads = store.list_threads("user-1")
 
         self.assertEqual(thread["thread_id"], "thread-1")
+        self.assertEqual(thread["user_id"], "user-1")
         self.assertIsNotNone(restored)
         assert restored is not None
         self.assertEqual(restored["title"], "青稞市场")
         self.assertEqual(restored["messages"][0]["content"], "查青稞")
-        self.assertEqual(threads[0]["thread_id"], "thread-1")
+        self.assertEqual([item["thread_id"] for item in threads], ["thread-1"])
 
 
 class ResearchThreadRouteTests(TestCase):
-    def test_thread_routes_are_disabled_for_browser_local_storage_only(self):
+    def test_thread_routes_require_authentication(self):
         client = TestClient(app)
 
-        save_response = client.put(
-            "/api/research/threads/thread-1",
-            json={
-                "title": "青稞市场",
-                "messages": [{"role": "user", "content": "查青稞"}],
-            },
-        )
-        get_response = client.get("/api/research/threads/thread-1")
         list_response = client.get("/api/research/threads")
 
-        self.assertEqual(save_response.status_code, 410)
-        self.assertEqual(get_response.status_code, 410)
-        self.assertEqual(list_response.status_code, 410)
+        self.assertEqual(list_response.status_code, 401)
+
+    def test_thread_routes_are_scoped_to_current_user(self):
+        from routers import research
+        from services.research_threads import JsonResearchThreadStore
+
+        client = TestClient(app)
+
+        with TemporaryDirectory() as tmpdir:
+            research.research_thread_store = JsonResearchThreadStore(tmpdir)
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user_id="user-1")
+            try:
+                save_response = client.put(
+                    "/api/research/threads/thread-1",
+                    json={
+                        "title": "青稞市场",
+                        "messages": [{"role": "user", "content": "查青稞"}],
+                    },
+                )
+                list_response = client.get("/api/research/threads")
+
+                app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user_id="user-2")
+                other_list_response = client.get("/api/research/threads")
+            finally:
+                app.dependency_overrides.clear()
+
+        self.assertEqual(save_response.status_code, 200)
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(other_list_response.status_code, 200)
+        self.assertEqual(list_response.json()[0]["thread_id"], "thread-1")
+        self.assertEqual(other_list_response.json(), [])
 
 
 class FakeSupabaseResponse:
@@ -122,8 +159,12 @@ class FakeSupabaseTable:
 
     def execute(self):
         if self.operation == "upsert":
-            conflict_key = self.on_conflict or _primary_key_for(self.table_name)
-            existing = next((row for row in self.rows if row.get(conflict_key) == self.payload.get(conflict_key)), None)
+            conflict_keys = (self.on_conflict or _primary_key_for(self.table_name)).split(",")
+            existing = next((
+                row
+                for row in self.rows
+                if all(row.get(key) == self.payload.get(key) for key in conflict_keys)
+            ), None)
             if existing is None:
                 self.rows.append(dict(self.payload))
                 return FakeSupabaseResponse([self.rows[-1]])

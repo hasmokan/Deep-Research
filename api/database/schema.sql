@@ -99,15 +99,20 @@ EXECUTE FUNCTION update_updated_at_column();
 
 -- Persisted chat threads for multi-session research conversations
 CREATE TABLE IF NOT EXISTS research_threads (
-    thread_id TEXT PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT 'New chat',
     messages JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    PRIMARY KEY (user_id, thread_id)
 );
 
 CREATE INDEX IF NOT EXISTS research_threads_updated_at_idx
 ON research_threads (updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS research_threads_user_updated_at_idx
+ON research_threads (user_id, updated_at DESC);
 
 DROP TRIGGER IF EXISTS update_research_threads_updated_at ON research_threads;
 CREATE TRIGGER update_research_threads_updated_at
@@ -118,6 +123,7 @@ EXECUTE FUNCTION update_updated_at_column();
 -- Persisted SSE run metadata and append-only event history
 CREATE TABLE IF NOT EXISTS research_runs (
     run_id TEXT PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     query TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'running',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -126,6 +132,9 @@ CREATE TABLE IF NOT EXISTS research_runs (
 
 CREATE INDEX IF NOT EXISTS research_runs_updated_at_idx
 ON research_runs (updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS research_runs_user_updated_at_idx
+ON research_runs (user_id, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS research_runs_status_idx
 ON research_runs (status);
@@ -152,8 +161,24 @@ ON research_run_events (run_id, seq);
 CREATE INDEX IF NOT EXISTS research_run_events_created_at_idx
 ON research_run_events (created_at DESC);
 
+-- Per-user long-term memo used to make future research requests more contextual.
+CREATE TABLE IF NOT EXISTS research_memories (
+    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    summary TEXT NOT NULL DEFAULT '',
+    recent_topics JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+DROP TRIGGER IF EXISTS update_research_memories_updated_at ON research_memories;
+CREATE TRIGGER update_research_memories_updated_at
+BEFORE UPDATE ON research_memories
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+
 -- These tables are intended for server-side access with SUPABASE_SERVICE_KEY.
 -- Keep RLS enabled so publishable/anon clients cannot read other users' threads.
 ALTER TABLE research_threads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE research_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE research_run_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE research_memories ENABLE ROW LEVEL SECURITY;

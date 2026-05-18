@@ -324,18 +324,25 @@ class LlmNodeModelTests(TestCase):
 class ResearchRouterThinkingTests(TestCase):
     def test_execute_research_returns_thinking_fields(self):
         from routers import research
+        from services.auth import AuthenticatedUser
 
-        with patch.object(research.research_agent, "ainvoke", new=AsyncMock(return_value={
-            "query": "test query",
-            "documents": [],
-            "analysis": "analysis answer",
-            "analysis_thinking": "analysis thinking",
-            "report": "report answer",
-            "report_thinking": "report thinking",
-            "report_completed": True,
-        })):
+        with (
+            patch.object(research.research_agent, "ainvoke", new=AsyncMock(return_value={
+                "query": "test query",
+                "documents": [],
+                "analysis": "analysis answer",
+                "analysis_thinking": "analysis thinking",
+                "report": "report answer",
+                "report_thinking": "report thinking",
+                "report_completed": True,
+            })),
+            patch.object(research, "research_memory_store", EmptyMemoryStore()),
+        ):
             result = asyncio.run(
-                research.execute_research(ResearchRequest(query="test query"))
+                research.execute_research(
+                    ResearchRequest(query="test query"),
+                    AuthenticatedUser(user_id="user-1"),
+                )
             )
 
         self.assertEqual(result["analysis_thinking"], "analysis thinking")
@@ -344,3 +351,16 @@ class ResearchRouterThinkingTests(TestCase):
 
 async def _collect_async_events(stream):
     return [event async for event in stream]
+
+
+class EmptyMemoryStore:
+    def get_memory(self, user_id):
+        return {
+            "user_id": user_id,
+            "summary": "",
+            "recent_topics": [],
+            "updated_at": "2026-05-18T00:00:00+00:00",
+        }
+
+    def remember_result(self, user_id, result):
+        return self.get_memory(user_id)

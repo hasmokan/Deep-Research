@@ -1,13 +1,16 @@
 """Research API routes"""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from models.schemas import DocumentResponse, ResearchPlanResponse, ResearchRequest, ResearchResponse
+from models.schemas import DocumentResponse, ResearchMemoryResponse, ResearchPlanResponse, ResearchRequest, ResearchResponse, ResearchThreadUpdate
 from agents.research_agent import research_agent
 from agents.research_stream import stream_research_events
 from agents.conversation_context import build_contextual_research_query
 from agents.nodes.plan import assess_research_plan_need, generate_research_plan
+from services.auth import AuthenticatedUser, get_current_user
+from services.research_memories import build_memory_context, research_memory_store
 from services.research_runs import research_run_store
+from services.research_threads import research_thread_store
 from services.vector_store import get_vector_store
 from datetime import datetime
 import json
@@ -16,15 +19,23 @@ import uuid
 router = APIRouter(prefix="/api/research", tags=["research"])
 
 
-def _raise_thread_persistence_disabled() -> None:
-    raise HTTPException(
-        status_code=410,
-        detail="Server-side research thread persistence is disabled. Conversation history is stored in browser localStorage.",
-    )
+def _user_id(current_user: AuthenticatedUser) -> str:
+    return getattr(current_user, "user_id", "test-user")
+
+
+def _memory_context_for_user(user_id: str) -> str:
+    return build_memory_context(research_memory_store.get_memory(user_id))
+
+
+def _remember_result(user_id: str, result: dict) -> None:
+    research_memory_store.remember_result(user_id, result)
 
 
 @router.post("/plan", response_model=ResearchPlanResponse)
-async def create_research_plan(request: ResearchRequest):
+async def create_research_plan(
+    request: ResearchRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Generate a query-specific research plan before the full research run.
     """
@@ -43,7 +54,11 @@ async def create_research_plan(request: ResearchRequest):
                     should_plan=False,
                 )
 
-        contextual_query = build_contextual_research_query(request.query, request.messages)
+        contextual_query = build_contextual_research_query(
+            request.query,
+            request.messages,
+            memory_context=_memory_context_for_user(_user_id(current_user)),
+        )
         plan = await generate_research_plan(contextual_query)
         plan["query"] = request.query
         return plan
@@ -55,7 +70,10 @@ async def create_research_plan(request: ResearchRequest):
 
 
 @router.post("/plan/stream")
-async def stream_research_plan(request: ResearchRequest):
+async def stream_research_plan(
+    request: ResearchRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Generate a query-specific research plan and stream plan progress as SSE.
     """
@@ -96,7 +114,11 @@ async def stream_research_plan(request: ResearchRequest):
                 },
             )
 
-            contextual_query = build_contextual_research_query(request.query, request.messages)
+            contextual_query = build_contextual_research_query(
+                request.query,
+                request.messages,
+                memory_context=_memory_context_for_user(_user_id(current_user)),
+            )
             plan = await generate_research_plan(contextual_query)
             payload = {**plan, "query": request.query, "should_plan": True}
 
@@ -127,11 +149,13 @@ def _format_sse_event(event: str, data: dict) -> str:
 @router.get("/stream")
 async def stream_research(
     query: str = Query(..., min_length=1, max_length=500),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """
     Execute research and stream progress/results as Server-Sent Events.
     """
-    run = research_run_store.create_run(query)
+    user_id = _user_id(current_user)
+    run = research_run_store.create_run(query, user_id=user_id)
 
     async def events():
         yield f'event: metadata\ndata: {{"run_id":"{run["run_id"]}"}}\n\n'
@@ -139,6 +163,7 @@ async def stream_research(
             query,
             run_id=run["run_id"],
             store=research_run_store,
+            on_complete=lambda result: _remember_result(user_id, result),
         ):
             yield event
 
@@ -154,13 +179,21 @@ async def stream_research(
 
 
 @router.post("/stream")
-async def stream_research_post(request: ResearchRequest):
+async def stream_research_post(
+    request: ResearchRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Execute research and stream progress/results as Server-Sent Events.
     Accepts conversation history in the request body for multi-turn follow-ups.
     """
-    contextual_query = build_contextual_research_query(request.query, request.messages)
-    run = research_run_store.create_run(request.query)
+    user_id = _user_id(current_user)
+    contextual_query = build_contextual_research_query(
+        request.query,
+        request.messages,
+        memory_context=_memory_context_for_user(user_id),
+    )
+    run = research_run_store.create_run(request.query, user_id=user_id)
 
     async def events():
         yield f'event: metadata\ndata: {{"run_id":"{run["run_id"]}"}}\n\n'
@@ -170,6 +203,7 @@ async def stream_research_post(request: ResearchRequest):
             display_query=request.query,
             store=research_run_store,
             latest_result=request.latest_result,
+            on_complete=lambda result: _remember_result(user_id, result),
         ):
             yield event
 
@@ -185,12 +219,15 @@ async def stream_research_post(request: ResearchRequest):
 
 
 @router.get("/runs/{run_id}")
-async def get_research_run(run_id: str):
+async def get_research_run(
+    run_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Return a persisted research run and its SSE event history.
     """
     try:
-        run = research_run_store.get_run(run_id)
+        run = research_run_store.get_run(run_id, user_id=_user_id(current_user))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -201,25 +238,61 @@ async def get_research_run(run_id: str):
 
 
 @router.get("/threads")
-async def list_research_threads():
-    """Server-side conversation thread persistence is disabled."""
-    _raise_thread_persistence_disabled()
+async def list_research_threads(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """List conversation threads for the authenticated user."""
+    return research_thread_store.list_threads(_user_id(current_user))
 
 
 @router.get("/threads/{thread_id}")
-async def get_research_thread(thread_id: str):
-    """Server-side conversation thread persistence is disabled."""
-    _raise_thread_persistence_disabled()
+async def get_research_thread(
+    thread_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Return a conversation thread for the authenticated user."""
+    try:
+        thread = research_thread_store.get_thread(_user_id(current_user), thread_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if thread is None:
+        raise HTTPException(status_code=404, detail=f"Research thread {thread_id} not found")
+
+    return thread
 
 
 @router.put("/threads/{thread_id}")
-async def save_research_thread(thread_id: str):
-    """Server-side conversation thread persistence is disabled."""
-    _raise_thread_persistence_disabled()
+async def save_research_thread(
+    thread_id: str,
+    request: ResearchThreadUpdate,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Persist a conversation thread for the authenticated user."""
+    try:
+        return research_thread_store.upsert_thread(
+            _user_id(current_user),
+            thread_id,
+            title=request.title,
+            messages=request.messages,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/memory", response_model=ResearchMemoryResponse)
+async def get_research_memory(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Return the authenticated user's long-term research memory."""
+    return research_memory_store.get_memory(_user_id(current_user))
 
 
 @router.post("/", response_model=ResearchResponse)
-async def create_research(request: ResearchRequest):
+async def create_research(
+    request: ResearchRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Execute a research query using the LangGraph agent
 
@@ -230,7 +303,11 @@ async def create_research(request: ResearchRequest):
         Research response with ID, query, status, and document count
     """
     try:
-        contextual_query = build_contextual_research_query(request.query, request.messages)
+        contextual_query = build_contextual_research_query(
+            request.query,
+            request.messages,
+            memory_context=_memory_context_for_user(_user_id(current_user)),
+        )
         initial_state = {
             "query": contextual_query,
             "display_query": request.query,
@@ -268,7 +345,10 @@ async def create_research(request: ResearchRequest):
 
 
 @router.post("/execute", response_model=dict)
-async def execute_research(request: ResearchRequest):
+async def execute_research(
+    request: ResearchRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Execute research and return full results including report
 
@@ -279,7 +359,12 @@ async def execute_research(request: ResearchRequest):
         Complete research results with documents, analysis, and report
     """
     try:
-        contextual_query = build_contextual_research_query(request.query, request.messages)
+        user_id = _user_id(current_user)
+        contextual_query = build_contextual_research_query(
+            request.query,
+            request.messages,
+            memory_context=_memory_context_for_user(user_id),
+        )
         initial_state = {
             "query": contextual_query,
             "display_query": request.query,
@@ -301,7 +386,7 @@ async def execute_research(request: ResearchRequest):
         result = await research_agent.ainvoke(initial_state)
 
         # Return full results
-        return {
+        result_payload = {
             "query": request.query,
             "documents": result.get("documents", []),
             "analysis": result.get("analysis"),
@@ -312,6 +397,8 @@ async def execute_research(request: ResearchRequest):
             "result_type": result.get("result_type") or "report",
             "status": "completed" if result.get("report_completed") else "failed"
         }
+        _remember_result(user_id, result_payload)
+        return result_payload
 
     except Exception as e:
         raise HTTPException(

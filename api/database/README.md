@@ -3,7 +3,8 @@
 ## Prerequisites
 
 1. Create a Supabase project at [https://supabase.com](https://supabase.com)
-2. Get your project URL and service key from Settings > API
+2. Get your project URL, publishable key, and service key from Settings > API
+3. Enable Google in Authentication > Providers after creating a Google OAuth client
 
 ## Setup Steps
 
@@ -29,6 +30,17 @@ RESEARCH_STORAGE_BACKEND=supabase
 research threads/runs because the schema enables RLS on those tables and does not
 grant public policies.
 
+For the Next.js frontend, create `web/.env.local` from `web/.env.example`:
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+```
+
+Only publishable Supabase keys belong in `NEXT_PUBLIC_*` variables. Never put
+`SUPABASE_SERVICE_KEY` in Vercel or any browser-visible frontend environment.
+
 ### 2. Run Database Schema
 
 Execute the SQL schema in your Supabase project:
@@ -44,7 +56,24 @@ Execute the SQL schema in your Supabase project:
 supabase db push
 ```
 
-### 3. Verify Setup
+For an existing deployment that already created the old anonymous
+`research_threads` or `research_runs` tables, run
+`api/database/auth_user_isolation.sql` once in the SQL Editor instead. It drops
+old anonymous thread/run rows because they cannot be safely assigned to a Google
+account.
+
+### 3. Configure Google OAuth
+
+1. In Google Cloud Console, create an OAuth Web Client.
+2. Add this authorized redirect URI:
+   `https://<your-project-ref>.supabase.co/auth/v1/callback`
+3. In Supabase Authentication > Providers > Google, paste the Google Client ID
+   and Client Secret and enable the provider.
+4. In Supabase Authentication > URL Configuration, add these redirect URLs:
+   - `http://localhost:3000/auth/callback`
+   - `https://your-vercel-domain.vercel.app/auth/callback`
+
+### 4. Verify Setup
 
 After running the schema, you should have:
 
@@ -54,6 +83,7 @@ After running the schema, you should have:
 - `research_threads` - Persists chat sessions and messages
 - `research_runs` - Persists research run metadata
 - `research_run_events` - Persists streaming run events for restore/replay
+- `research_memories` - Persists per-user long-term memo summaries
 
 **Indexes:**
 - `documents_embedding_idx` - IVFFlat index for fast vector similarity search
@@ -66,7 +96,7 @@ After running the schema, you should have:
 - `match_documents()` - Performs similarity search with threshold
 - `update_updated_at_column()` - Automatically updates timestamps
 
-### 4. Test Connection
+### 5. Test Connection
 
 Run the FastAPI server:
 ```bash

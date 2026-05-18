@@ -5,15 +5,23 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, MoreHorizontal, Share, Sparkles } from 'lucide-react';
+import type { Session } from '@supabase/supabase-js';
+import { CheckCircle2, LogOut, MoreHorizontal, Share, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
+import { LoginScreen } from '@/components/auth/login-screen';
 import { ChatSidebar } from '@/components/layouts/chat-sidebar';
 import { ErrorState, LoadingState, ReportSidebar, ResultsDisplay, SearchForm } from '@/components/research';
 import { MarkdownContent } from '@/components/research/markdown-content';
 import { ResearchPlanPanel } from '@/components/research/research-plan-panel';
 import { apiClient } from '@/lib/api';
-import type { ResearchResult } from '@/lib/api/types';
+import type { ResearchResult, ResearchThread } from '@/lib/api/types';
+import {
+  getAuthSession,
+  getSupabaseClient,
+  isSupabaseAuthConfigured,
+  signInWithGoogle,
+} from '@/lib/auth/supabase';
 import {
   appendResearchActivityStatus,
   appendResearchActivityDocuments,
@@ -37,8 +45,6 @@ import {
 } from '@/lib/research/research-workflow';
 import {
   createResearchSession,
-  restoreLocalResearchSessionState,
-  saveResearchSessionSnapshot,
   updateResearchSessionMessages,
   upsertResearchSession,
   type ResearchSession,
@@ -64,6 +70,28 @@ function getLatestArtifactResult(messages: ConversationMessage[]) {
     .reverse()
     .find((message) => isReportResult(message.result))
     ?.result ?? null;
+}
+
+function sessionFromThread(thread: ResearchThread): ResearchSession {
+  const messages = Array.isArray(thread.messages)
+    ? thread.messages as ConversationMessage[]
+    : [];
+
+  return {
+    id: thread.thread_id,
+    title: thread.title || 'New chat',
+    messages,
+    latestResult: getLatestArtifactResult(messages),
+    createdAt: thread.created_at,
+    updatedAt: thread.updated_at,
+  };
+}
+
+function threadUpdateFromSession(session: ResearchSession) {
+  return {
+    title: session.title,
+    messages: session.messages,
+  };
 }
 
 function AssistantResultMessage({ message }: { message: ConversationMessage }) {
@@ -142,10 +170,14 @@ export default function Home() {
   const [sessions, setSessions] = useState<ResearchSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [hasLoadedSessions, setHasLoadedSessions] = useState(false);
+  const [authSession, setAuthSession] = useState<Session | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isSigningIn, setSigningIn] = useState(false);
   const [isPlanning, setPlanning] = useState(false);
   const [isDeepResearchMode, setDeepResearchMode] = useState(true);
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
+  const authSessionRef = useRef<Session | null>(null);
   const activeResearchRef = useRef<{ sessionId: string; messageId: string } | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const messagesRef = useRef<ConversationMessage[]>([]);
@@ -190,23 +222,97 @@ export default function Home() {
   });
 
   useEffect(() => {
-    const {
-      activeSession,
-      activeSessionId: nextActiveSessionId,
-      sessions: restoredSessions,
-    } = restoreLocalResearchSessionState(window.localStorage);
+    let cancelled = false;
 
-    sessionsRef.current = restoredSessions;
-    activeSessionIdRef.current = nextActiveSessionId;
-    messagesRef.current = activeSession?.messages ?? [];
-    setSessions(restoredSessions);
-    setActiveSessionId(nextActiveSessionId);
-    setMessages(activeSession?.messages ?? []);
-    setQuery(activeSession?.title === 'New chat' ? '' : activeSession?.title ?? '');
-    setResult(activeSession?.latestResult ?? null);
-    setDeepResearchMode(!activeSession?.latestResult);
-    setHasLoadedSessions(true);
-  }, [setQuery, setResult]);
+    const clearResearchState = () => {
+      abortControllerRef.current?.abort();
+      activeResearchRef.current = null;
+      activeSessionIdRef.current = null;
+      messagesRef.current = [];
+      sessionsRef.current = [];
+      setSessions([]);
+      setActiveSessionId(null);
+      setMessages([]);
+      setResearchPlan(null);
+      setLocalQuery('');
+      setQuery('');
+      setResult(null);
+      setDeepResearchMode(true);
+      setPlanning(false);
+      setLoading(false);
+      setError(null);
+      resetStream();
+    };
+
+    const applyAuthSession = async (nextSession: Session | null) => {
+      authSessionRef.current = nextSession;
+      apiClient.setAccessTokenProvider(() => authSessionRef.current?.access_token ?? null);
+
+      if (cancelled) {
+        return;
+      }
+
+      setAuthSession(nextSession);
+
+      if (!nextSession) {
+        clearResearchState();
+        setHasLoadedSessions(true);
+        return;
+      }
+
+      setHasLoadedSessions(false);
+
+      try {
+        const restoredSessions = (await apiClient.listResearchThreads()).map(sessionFromThread);
+        const activeSession = restoredSessions[0] ?? null;
+        const nextActiveSessionId = activeSession?.id ?? null;
+
+        if (cancelled) {
+          return;
+        }
+
+        sessionsRef.current = restoredSessions;
+        activeSessionIdRef.current = nextActiveSessionId;
+        messagesRef.current = activeSession?.messages ?? [];
+        setSessions(restoredSessions);
+        setActiveSessionId(nextActiveSessionId);
+        setMessages(activeSession?.messages ?? []);
+        setQuery(activeSession?.title === 'New chat' ? '' : activeSession?.title ?? '');
+        setResult(activeSession?.latestResult ?? null);
+        setDeepResearchMode(!activeSession?.latestResult);
+        setAuthError(null);
+      } catch (sessionError) {
+        clearResearchState();
+        setAuthError(sessionError instanceof Error ? sessionError.message : 'Unable to load your research sessions');
+      } finally {
+        if (!cancelled) {
+          setHasLoadedSessions(true);
+        }
+      }
+    };
+
+    if (!isSupabaseAuthConfigured()) {
+      setAuthError('Supabase Google login is not configured');
+      setHasLoadedSessions(true);
+      return;
+    }
+
+    void getAuthSession()
+      .then(applyAuthSession)
+      .catch((sessionError) => {
+        setAuthError(sessionError instanceof Error ? sessionError.message : 'Unable to read your login session');
+        setHasLoadedSessions(true);
+      });
+
+    const { data } = getSupabaseClient().auth.onAuthStateChange((_event, nextSession) => {
+      void applyAuthSession(nextSession);
+    });
+
+    return () => {
+      cancelled = true;
+      data.subscription.unsubscribe();
+    };
+  }, [resetStream, setError, setLoading, setQuery, setResult]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -219,17 +325,6 @@ export default function Home() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
-
-  useEffect(() => {
-    if (!hasLoadedSessions) {
-      return;
-    }
-
-    saveResearchSessionSnapshot(window.localStorage, {
-      activeSessionId,
-      sessions,
-    });
-  }, [activeSessionId, hasLoadedSessions, sessions]);
 
   useEffect(() => {
     if (hasConversation) {
@@ -254,7 +349,11 @@ export default function Home() {
 
     sessionsRef.current = nextSessions;
     setSessions(nextSessions);
-  }, []);
+    void apiClient.saveResearchThread(updatedSession.id, threadUpdateFromSession(updatedSession))
+      .catch((saveError) => {
+        setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
+      });
+  }, [setError]);
 
   const saveActiveSessionMessages = (nextMessages: ConversationMessage[]) => {
     if (!activeSessionIdRef.current && nextMessages.length === 0) {
@@ -276,6 +375,10 @@ export default function Home() {
     sessionsRef.current = nextSessions;
     setActiveSessionId(updatedSession.id);
     setSessions(nextSessions);
+    void apiClient.saveResearchThread(updatedSession.id, threadUpdateFromSession(updatedSession))
+      .catch((saveError) => {
+        setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
+      });
 
     return updatedSession.id;
   };
@@ -379,6 +482,10 @@ export default function Home() {
 
     sessionsRef.current = nextSessions;
     setSessions(nextSessions);
+    void apiClient.saveResearchThread(session.id, threadUpdateFromSession(session))
+      .catch((saveError) => {
+        setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
+      });
     activateSession(session);
   };
 
@@ -668,6 +775,51 @@ export default function Home() {
     setDeepResearchMode((enabled) => !enabled);
   };
 
+  const handleSignIn = async () => {
+    setSigningIn(true);
+    setAuthError(null);
+
+    try {
+      await signInWithGoogle();
+    } catch (signInError) {
+      setAuthError(signInError instanceof Error ? signInError.message : 'Google sign-in failed');
+      setSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    abortControllerRef.current?.abort();
+    await getSupabaseClient().auth.signOut();
+  };
+
+  if (!isSupabaseAuthConfigured()) {
+    return (
+      <LoginScreen
+        error={authError || 'Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in Vercel.'}
+        isLoading={isSigningIn}
+        onSignIn={handleSignIn}
+      />
+    );
+  }
+
+  if (!hasLoadedSessions) {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-background text-sm text-muted-foreground">
+        Loading your workspace...
+      </main>
+    );
+  }
+
+  if (!authSession) {
+    return (
+      <LoginScreen
+        error={authError}
+        isLoading={isSigningIn}
+        onSignIn={handleSignIn}
+      />
+    );
+  }
+
   return (
     <div className="flex h-dvh overflow-hidden bg-background text-foreground">
       <ChatSidebar
@@ -687,11 +839,25 @@ export default function Home() {
           </div>
           <div className="hidden lg:block" />
           <div className="flex items-center gap-1">
+            <span className="hidden max-w-[220px] truncate px-2 text-sm text-muted-foreground md:inline">
+              {authSession.user.email}
+            </span>
             <Button variant="ghost" className="h-9 rounded-full px-3">
               <Share className="h-4 w-4" />
               Share
             </Button>
             <ThemeToggle />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 rounded-full"
+              aria-label="Sign out"
+              onClick={() => {
+                void handleSignOut();
+              }}
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
             <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" aria-label="More actions">
               <MoreHorizontal className="h-5 w-5" />
             </Button>

@@ -8,12 +8,19 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from main import app
+from services.auth import AuthenticatedUser, get_current_user
 
 
 class ResearchStreamTests(TestCase):
     def setUp(self):
         from agents import research_stream
         from services.langfuse_observability import NoopLangfuseTracer
+
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user_id="user-1")
+        self.addCleanup(app.dependency_overrides.clear)
+        memory_patcher = patch("routers.research.research_memory_store", EmptyMemoryStore())
+        memory_patcher.start()
+        self.addCleanup(memory_patcher.stop)
 
         langfuse_patcher = patch.object(
             research_stream,
@@ -206,7 +213,7 @@ class ResearchStreamTests(TestCase):
         from agents.research_stream import format_sse_event
         from routers import research
 
-        async def fake_stream(query, run_id=None, display_query=None, store=None):
+        async def fake_stream(query, run_id=None, display_query=None, store=None, on_complete=None):
             yield format_sse_event("status", {"stage": "search", "message": query})
             yield format_sse_event("complete", {"query": query, "status": "completed"})
 
@@ -243,7 +250,7 @@ class ResearchStreamTests(TestCase):
         }):
             with patch.object(research.research_run_store, "append_event"):
                 with patch.object(research, "stream_research_events") as stream:
-                    async def fake_stream(query, run_id=None, display_query=None, store=None):
+                    async def fake_stream(query, run_id=None, display_query=None, store=None, on_complete=None):
                         self.assertEqual(run_id, "run-test")
                         yield 'event: complete\ndata: {"query":"test query","status":"completed"}\n\n'
 
@@ -278,3 +285,16 @@ class ResearchStreamTests(TestCase):
 
 async def _collect_stream_events(stream):
     return [event async for event in stream]
+
+
+class EmptyMemoryStore:
+    def get_memory(self, user_id):
+        return {
+            "user_id": user_id,
+            "summary": "",
+            "recent_topics": [],
+            "updated_at": "2026-05-18T00:00:00+00:00",
+        }
+
+    def remember_result(self, user_id, result):
+        return self.get_memory(user_id)

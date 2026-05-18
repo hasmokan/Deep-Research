@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from typing import Any, AsyncIterator
 
@@ -82,6 +83,7 @@ async def stream_research_events(
     display_query: str | None = None,
     store: Any | None = None,
     latest_result: dict[str, Any] | None = None,
+    on_complete: Any | None = None,
 ) -> AsyncIterator[str]:
     """Run research and emit progress/result events as SSE strings."""
     visible_query = display_query or query
@@ -107,6 +109,13 @@ async def stream_research_events(
         if run_id and store:
             store.append_event(run_id, event, data)
         return format_sse_event(event, data)
+
+    async def complete_event(result_payload: dict[str, Any]) -> str:
+        if on_complete:
+            maybe_result = on_complete(result_payload)
+            if inspect.isawaitable(maybe_result):
+                await maybe_result
+        return record_event("complete", result_payload)
 
     with tracer.start(
         "research-run",
@@ -180,7 +189,7 @@ async def stream_research_events(
                 await asyncio.sleep(0)
                 result_payload = _result_payload(state)
                 run_observation.update(output=_result_observability_summary(result_payload))
-                yield record_event("complete", result_payload)
+                yield await complete_event(result_payload)
                 return
 
             if route == "answer_from_artifact":
@@ -222,7 +231,7 @@ async def stream_research_events(
                 await asyncio.sleep(0)
                 result_payload = _result_payload(state)
                 run_observation.update(output=_result_observability_summary(result_payload))
-                yield record_event("complete", result_payload)
+                yield await complete_event(result_payload)
                 return
 
             yield record_event(
@@ -288,7 +297,7 @@ async def stream_research_events(
                 )
                 result_payload = _result_payload(state)
                 run_observation.update(output=_result_observability_summary(result_payload))
-                yield record_event("complete", result_payload)
+                yield await complete_event(result_payload)
                 return
 
             yield record_event(
@@ -377,7 +386,7 @@ async def stream_research_events(
             await asyncio.sleep(0)
             result_payload = _result_payload(state)
             run_observation.update(output=_result_observability_summary(result_payload))
-            yield record_event("complete", result_payload)
+            yield await complete_event(result_payload)
         except asyncio.CancelledError:
             run_observation.update(output={"status": "stopped"})
             if run_id and store:

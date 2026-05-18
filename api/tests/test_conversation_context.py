@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from main import app
 from models.schemas import ResearchRequest
+from services.auth import AuthenticatedUser, get_current_user
 
 
 class ConversationContextTests(TestCase):
@@ -43,8 +44,30 @@ class ConversationContextTests(TestCase):
         self.assertIn("user: 做研究", contextual_query)
         self.assertIn("assistant: Research report for 做研究", contextual_query)
 
+    def test_contextual_query_includes_local_memory_context(self):
+        from agents.conversation_context import build_contextual_research_query
+
+        contextual_query = build_contextual_research_query(
+            "继续研究",
+            [],
+            memory_context="Local user memo:\nRecent research topics: deep research 部署",
+        )
+
+        self.assertIn("Long-term user memo:", contextual_query)
+        self.assertIn("Recent research topics: deep research 部署", contextual_query)
+        self.assertIn("Current user request:\n继续研究", contextual_query)
+
 
 class ConversationResearchRouteTests(TestCase):
+    def setUp(self):
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user_id="user-1")
+        self.memory_patcher = patch("routers.research.research_memory_store", EmptyMemoryStore())
+        self.memory_patcher.start()
+
+    def tearDown(self):
+        app.dependency_overrides.clear()
+        self.memory_patcher.stop()
+
     def test_execute_research_uses_contextual_query_and_returns_display_query(self):
         from routers import research
 
@@ -58,7 +81,10 @@ class ConversationResearchRouteTests(TestCase):
             "report_completed": True,
         })
 
-        with patch.object(research.research_agent, "ainvoke", agent):
+        with (
+            patch.object(research.research_agent, "ainvoke", agent),
+            patch.object(research, "research_memory_store", TopicMemoryStore()),
+        ):
             result = asyncio.run(
                 research.execute_research(
                     ResearchRequest(
@@ -67,12 +93,14 @@ class ConversationResearchRouteTests(TestCase):
                             {"role": "user", "content": "做研究"},
                             {"role": "assistant", "content": "第三点是问题意识的形成。"},
                         ],
-                    )
+                    ),
+                    AuthenticatedUser(user_id="user-1"),
                 )
             )
 
         state = agent.await_args.args[0]
         self.assertIn("Previous conversation context:", state["query"])
+        self.assertIn("Long-term user memo:", state["query"])
         self.assertIn("Current user request:\n展开第三点", state["query"])
         self.assertEqual(state["display_query"], "展开第三点")
         self.assertEqual(result["query"], "展开第三点")
@@ -81,7 +109,7 @@ class ConversationResearchRouteTests(TestCase):
         from agents.research_stream import format_sse_event
         from routers import research
 
-        async def fake_stream(query, run_id=None, display_query=None, store=None, latest_result=None):
+        async def fake_stream(query, run_id=None, display_query=None, store=None, latest_result=None, on_complete=None):
             self.assertIn("Previous conversation context:", query)
             self.assertEqual(display_query, "展开第三点")
             self.assertIsNone(latest_result)
@@ -112,3 +140,32 @@ class ConversationResearchRouteTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/event-stream", response.headers["content-type"])
         self.assertIn('"query":"展开第三点"', response.text)
+
+
+class EmptyMemoryStore:
+    def get_memory(self, user_id):
+        return {
+            "user_id": user_id,
+            "summary": "",
+            "recent_topics": [],
+            "updated_at": "2026-05-18T00:00:00+00:00",
+        }
+
+    def remember_result(self, user_id, result):
+        return self.get_memory(user_id)
+
+
+class TopicMemoryStore(EmptyMemoryStore):
+    def get_memory(self, user_id):
+        return {
+            "user_id": user_id,
+            "summary": "Recent research topics: 做研究",
+            "recent_topics": [
+                {
+                    "query": "做研究",
+                    "result_type": "report",
+                    "updated_at": "2026-05-18T00:00:00+00:00",
+                },
+            ],
+            "updated_at": "2026-05-18T00:00:00+00:00",
+        }

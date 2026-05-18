@@ -11,14 +11,17 @@ class ResearchRunStoreTests(TestCase):
         with TemporaryDirectory() as tmpdir:
             store = JsonlResearchRunStore(tmpdir)
 
-            run = store.create_run("青稞市场占有率")
+            run = store.create_run("青稞市场占有率", user_id="user-1")
             store.append_event(run["run_id"], "status", {"stage": "search"})
             store.append_event(run["run_id"], "complete", {"status": "completed"})
 
-            restored = store.get_run(run["run_id"])
+            restored = store.get_run(run["run_id"], user_id="user-1")
+            hidden = store.get_run(run["run_id"], user_id="user-2")
 
         self.assertIsNotNone(restored)
+        self.assertIsNone(hidden)
         assert restored is not None
+        self.assertEqual(restored["user_id"], "user-1")
         self.assertEqual(restored["query"], "青稞市场占有率")
         self.assertEqual(restored["status"], "completed")
         self.assertEqual(
@@ -33,10 +36,10 @@ class ResearchRunStoreTests(TestCase):
         with TemporaryDirectory() as tmpdir:
             store = JsonlResearchRunStore(tmpdir)
 
-            run = store.create_run("青稞市场占有率")
+            run = store.create_run("青稞市场占有率", user_id="user-1")
             store.append_event(run["run_id"], "stream_error", {"detail": "boom"})
 
-            restored = store.get_run(run["run_id"])
+            restored = store.get_run(run["run_id"], user_id="user-1")
 
         self.assertIsNotNone(restored)
         assert restored is not None
@@ -48,10 +51,10 @@ class ResearchRunStoreTests(TestCase):
         with TemporaryDirectory() as tmpdir:
             store = JsonlResearchRunStore(tmpdir)
 
-            run = store.create_run("青稞市场占有率")
+            run = store.create_run("青稞市场占有率", user_id="user-1")
             store.append_event(run["run_id"], "stopped", {"status": "stopped"})
 
-            restored = store.get_run(run["run_id"])
+            restored = store.get_run(run["run_id"], user_id="user-1")
 
         self.assertIsNotNone(restored)
         assert restored is not None
@@ -63,14 +66,17 @@ class ResearchRunStoreTests(TestCase):
         client = FakeSupabaseClient()
         store = SupabaseResearchRunStore(client)
 
-        run = store.create_run("青稞市场占有率")
+        run = store.create_run("青稞市场占有率", user_id="user-1")
         store.append_event(run["run_id"], "status", {"stage": "search"})
         store.append_event(run["run_id"], "complete", {"status": "completed"})
 
-        restored = store.get_run(run["run_id"])
+        restored = store.get_run(run["run_id"], user_id="user-1")
+        hidden = store.get_run(run["run_id"], user_id="user-2")
 
         self.assertIsNotNone(restored)
+        self.assertIsNone(hidden)
         assert restored is not None
+        self.assertEqual(restored["user_id"], "user-1")
         self.assertEqual(restored["query"], "青稞市场占有率")
         self.assertEqual(restored["status"], "completed")
         self.assertEqual(

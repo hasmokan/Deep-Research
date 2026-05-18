@@ -57,12 +57,27 @@ export interface ResearchRunEvent {
 }
 
 export interface ResearchRun {
+  user_id?: string;
   run_id: string;
   query: string;
   status: string;
   created_at: string;
   updated_at: string;
   events: ResearchRunEvent[];
+}
+
+export interface ResearchThread {
+  user_id?: string;
+  thread_id: string;
+  title: string;
+  messages: unknown[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResearchThreadUpdate {
+  title: string;
+  messages: unknown[];
 }
 
 export interface ResearchStreamMetadata {

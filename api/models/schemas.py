@@ -55,6 +55,18 @@ class ResearchPlanResponse(BaseModel):
     should_plan: bool = True
 
 
+class ResearchThreadUpdate(BaseModel):
+    title: str = Field(default="New chat", max_length=120)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ResearchMemoryResponse(BaseModel):
+    user_id: str
+    summary: str
+    recent_topics: list[dict[str, Any]]
+    updated_at: str
+
+
 class DocumentResponse(BaseModel):
     id: int
     content: str

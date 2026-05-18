@@ -6,9 +6,19 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from main import app
+from services.auth import AuthenticatedUser, get_current_user
 
 
 class ResearchPlanRouteTests(TestCase):
+    def setUp(self):
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user_id="user-1")
+        self.memory_patcher = patch("routers.research.research_memory_store", EmptyMemoryStore())
+        self.memory_patcher.start()
+
+    def tearDown(self):
+        app.dependency_overrides.clear()
+        self.memory_patcher.stop()
+
     def test_plan_endpoint_returns_generated_research_plan(self):
         client = TestClient(app)
         generated_plan = {
@@ -334,3 +344,16 @@ def _parse_sse_events(text: str) -> list[dict]:
         data = "\n".join(line.removeprefix("data: ") for line in lines if line.startswith("data: "))
         events.append({"event": event, "data": __import__("json").loads(data)})
     return events
+
+
+class EmptyMemoryStore:
+    def get_memory(self, user_id):
+        return {
+            "user_id": user_id,
+            "summary": "",
+            "recent_topics": [],
+            "updated_at": "2026-05-18T00:00:00+00:00",
+        }
+
+    def remember_result(self, user_id, result):
+        return self.get_memory(user_id)

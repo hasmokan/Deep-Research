@@ -226,6 +226,7 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
 class FollowUpResearchRouteTests(TestCase):
     def test_execute_research_passes_latest_result_to_agent_state(self):
         from routers import research
+        from services.auth import AuthenticatedUser
 
         async def fake_ainvoke(state):
             self.assertEqual(state["latest_result"]["query"], LATEST_RESULT["query"])
@@ -242,12 +243,29 @@ class FollowUpResearchRouteTests(TestCase):
                 "report_completed": True,
             }
 
-        with patch.object(research.research_agent, "ainvoke", side_effect=fake_ainvoke):
+        with (
+            patch.object(research.research_agent, "ainvoke", side_effect=fake_ainvoke),
+            patch.object(research, "research_memory_store", EmptyMemoryStore()),
+        ):
             result = asyncio.run(
                 research.execute_research(
-                    ResearchRequest(query="来源是？", latest_result=LATEST_RESULT)
+                    ResearchRequest(query="来源是？", latest_result=LATEST_RESULT),
+                    AuthenticatedUser(user_id="user-1"),
                 )
             )
 
         self.assertEqual(result["result_type"], "answer")
         self.assertIn("https://example.com/report", result["answer"])
+
+
+class EmptyMemoryStore:
+    def get_memory(self, user_id):
+        return {
+            "user_id": user_id,
+            "summary": "",
+            "recent_topics": [],
+            "updated_at": "2026-05-18T00:00:00+00:00",
+        }
+
+    def remember_result(self, user_id, result):
+        return self.get_memory(user_id)

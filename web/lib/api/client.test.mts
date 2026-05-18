@@ -64,3 +64,62 @@ test('streamResearchPlan reads status events and returns the completed plan', as
     globalThis.fetch = originalFetch;
   }
 });
+
+test('request methods send the current bearer token', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, 'http://api.test/api/research/threads');
+    assert.equal(init?.headers && new Headers(init.headers).get('Authorization'), 'Bearer token-123');
+
+    return Response.json([]);
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    client.setAccessTokenProvider(() => 'token-123');
+
+    await client.listResearchThreads();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('stream methods send the current bearer token', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+
+  const plan: ResearchPlanResponse = {
+    query: 'Compare AI search products',
+    source_label: 'Public web',
+    summary: 'Compare AI search products by source coverage, UX, and report quality.',
+    steps: [],
+    should_plan: true,
+  };
+
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, 'http://api.test/api/research/plan/stream');
+    assert.equal(init?.headers && new Headers(init.headers).get('Authorization'), 'Bearer token-123');
+
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(plan)}\n\n`));
+        controller.close();
+      },
+    });
+
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    client.setAccessTokenProvider(() => 'token-123');
+
+    await client.streamResearchPlan({ query: plan.query });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

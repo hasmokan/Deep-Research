@@ -107,6 +107,11 @@ cp .env.example .env
 # - LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL
 ```
 
+Google login is required for the deployed app. Enable Google in Supabase
+Authentication > Providers, set the Supabase callback URL in Google Cloud, and
+add `/auth/callback` for localhost and your Vercel domain in Supabase redirect
+URLs. See [api/database/README.md](api/database/README.md) for the exact setup.
+
 Optional Langfuse tracing records each research run as an agent trace with
 intent routing, web search candidates, analysis generation, report generation,
 and completion/error metadata. This is useful for evaluating bad retrievals and
@@ -121,8 +126,8 @@ cd web
 pnpm install
 
 # Configure environment
-# Create .env.local (already exists with default values)
-# Edit if your backend runs on a different port
+cp .env.example .env.local
+# Edit NEXT_PUBLIC_API_URL, NEXT_PUBLIC_SUPABASE_URL, and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 ```
 
 ## Running the Application
