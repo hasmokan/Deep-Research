@@ -217,6 +217,10 @@ class ResearchStreamTests(TestCase):
             yield format_sse_event("status", {"stage": "search", "message": query})
             yield format_sse_event("complete", {"query": query, "status": "completed"})
 
+        async def fake_persisted_stream(run_id, user_id, store=None):
+            yield format_sse_event("status", {"stage": "search", "message": "test query"})
+            yield format_sse_event("complete", {"query": "test query", "status": "completed"})
+
         client = TestClient(app)
 
         with patch.object(research.research_run_store, "create_run", return_value={
@@ -227,7 +231,10 @@ class ResearchStreamTests(TestCase):
             "updated_at": "2026-05-17T00:00:00+00:00",
         }):
             with patch.object(research.research_run_store, "append_event"):
-                with patch.object(research, "stream_research_events", fake_stream):
+                with (
+                    patch.object(research, "stream_research_events", fake_stream),
+                    patch.object(research, "stream_persisted_research_run_events", side_effect=fake_persisted_stream),
+                ):
                     response = client.get("/api/research/stream?query=test%20query")
 
         self.assertEqual(response.status_code, 200)
@@ -237,7 +244,12 @@ class ResearchStreamTests(TestCase):
         self.assertIn("event: complete", response.text)
 
     def test_stream_route_emits_metadata_event_with_run_id(self):
+        from agents.research_stream import format_sse_event
         from routers import research
+
+        async def fake_persisted_stream(run_id, user_id, store=None):
+            yield format_sse_event("metadata", {"run_id": run_id})
+            yield format_sse_event("complete", {"query": "test query", "status": "completed"})
 
         client = TestClient(app)
 
@@ -249,7 +261,10 @@ class ResearchStreamTests(TestCase):
             "updated_at": "2026-05-17T00:00:00+00:00",
         }):
             with patch.object(research.research_run_store, "append_event"):
-                with patch.object(research, "stream_research_events") as stream:
+                with (
+                    patch.object(research, "stream_research_events") as stream,
+                    patch.object(research, "stream_persisted_research_run_events", side_effect=fake_persisted_stream),
+                ):
                     async def fake_stream(query, run_id=None, display_query=None, store=None, on_complete=None):
                         self.assertEqual(run_id, "run-test")
                         yield 'event: complete\ndata: {"query":"test query","status":"completed"}\n\n'
@@ -259,6 +274,68 @@ class ResearchStreamTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('event: metadata\ndata: {"run_id":"run-test"}', response.text)
+
+    def test_post_stream_route_starts_background_run_and_subscribes_to_persisted_events(self):
+        from agents.research_stream import format_sse_event
+        from routers import research
+
+        async def fake_persisted_stream(run_id, user_id, store=None):
+            yield format_sse_event("metadata", {"run_id": run_id})
+            yield format_sse_event("complete", {"query": "test query", "status": "completed"})
+
+        async def unused_live_stream(query, run_id=None, display_query=None, store=None, latest_result=None, on_complete=None):
+            yield format_sse_event("stream_error", {"detail": "live stream should not be used"})
+
+        client = TestClient(app)
+
+        with patch.object(research.research_run_store, "create_run", return_value={
+            "run_id": "run-test",
+            "query": "test query",
+            "status": "running",
+            "created_at": "2026-05-17T00:00:00+00:00",
+            "updated_at": "2026-05-17T00:00:00+00:00",
+        }):
+            with (
+                patch.object(research, "start_research_run_background", create=True) as start_background,
+                patch.object(
+                    research,
+                    "stream_persisted_research_run_events",
+                    side_effect=fake_persisted_stream,
+                    create=True,
+                ),
+                patch.object(research, "stream_research_events", unused_live_stream),
+            ):
+                response = client.post("/api/research/stream", json={"query": "test query"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: metadata", response.text)
+        self.assertIn("event: complete", response.text)
+        self.assertEqual(start_background.call_count, 1)
+
+    def test_run_stream_route_replays_persisted_events(self):
+        from routers import research
+
+        client = TestClient(app)
+
+        with patch.object(research.research_run_store, "get_run", return_value={
+            "run_id": "run-test",
+            "query": "test query",
+            "status": "completed",
+            "created_at": "2026-05-17T00:00:00+00:00",
+            "updated_at": "2026-05-17T00:00:01+00:00",
+            "events": [
+                {"event": "metadata", "data": {"run_id": "run-test"}, "seq": 1},
+                {"event": "status", "data": {"stage": "search", "message": "Searching"}, "seq": 2},
+                {"event": "complete", "data": {"query": "test query", "status": "completed"}, "seq": 3},
+            ],
+        }):
+            response = client.get("/api/research/runs/run-test/stream")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        self.assertIn("event: status", response.text)
+        self.assertIn('"message":"Searching"', response.text)
+        self.assertIn("event: complete", response.text)
 
     def test_get_run_route_returns_persisted_events(self):
         from routers import research

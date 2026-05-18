@@ -153,16 +153,27 @@ export function upsertResearchSession(
   };
 }
 
-export function loadResearchSessionSnapshot(storage: SessionStorageLike): ResearchSessionSnapshot {
+export function getResearchSessionsStorageKey(userId: string | null | undefined) {
+  const normalizedUserId = userId?.trim();
+
+  return normalizedUserId
+    ? `${RESEARCH_SESSIONS_STORAGE_KEY}.${normalizedUserId}`
+    : RESEARCH_SESSIONS_STORAGE_KEY;
+}
+
+export function readResearchSessionSnapshot(
+  storage: SessionStorageLike,
+  storageKey: string = RESEARCH_SESSIONS_STORAGE_KEY,
+): ResearchSessionSnapshot | null {
   try {
-    const rawValue = storage.getItem(RESEARCH_SESSIONS_STORAGE_KEY);
+    const rawValue = storage.getItem(storageKey);
     if (!rawValue) {
-      return EMPTY_SNAPSHOT;
+      return null;
     }
 
     const parsedValue = JSON.parse(rawValue);
     if (!isRecord(parsedValue) || !Array.isArray(parsedValue.sessions)) {
-      return EMPTY_SNAPSHOT;
+      return null;
     }
 
     return {
@@ -170,13 +181,18 @@ export function loadResearchSessionSnapshot(storage: SessionStorageLike): Resear
       sessions: sortSessionsByActivity(parsedValue.sessions.filter(isResearchSession)),
     };
   } catch {
-    return EMPTY_SNAPSHOT;
+    return null;
   }
 }
 
-export function restoreLocalResearchSessionState(storage: SessionStorageLike): LocalResearchSessionState {
-  const snapshot = loadResearchSessionSnapshot(storage);
+export function loadResearchSessionSnapshot(
+  storage: SessionStorageLike,
+  storageKey: string = RESEARCH_SESSIONS_STORAGE_KEY,
+): ResearchSessionSnapshot {
+  return readResearchSessionSnapshot(storage, storageKey) ?? EMPTY_SNAPSHOT;
+}
 
+export function restoreResearchSessionSnapshot(snapshot: ResearchSessionSnapshot): LocalResearchSessionState {
   if (!snapshot.sessions.length) {
     return {
       activeSessionId: null,
@@ -206,9 +222,17 @@ export function restoreLocalResearchSessionState(storage: SessionStorageLike): L
   };
 }
 
+export function restoreLocalResearchSessionState(
+  storage: SessionStorageLike,
+  storageKey: string = RESEARCH_SESSIONS_STORAGE_KEY,
+): LocalResearchSessionState {
+  return restoreResearchSessionSnapshot(loadResearchSessionSnapshot(storage, storageKey));
+}
+
 export function saveResearchSessionSnapshot(
   storage: SessionStorageLike,
   snapshot: ResearchSessionSnapshot,
+  storageKey: string = RESEARCH_SESSIONS_STORAGE_KEY,
 ) {
-  storage.setItem(RESEARCH_SESSIONS_STORAGE_KEY, JSON.stringify(snapshot));
+  storage.setItem(storageKey, JSON.stringify(snapshot));
 }

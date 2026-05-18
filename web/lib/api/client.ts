@@ -10,6 +10,7 @@ import type {
   ResearchResponse,
   ResearchResult,
   ResearchRun,
+  ResearchRunStreamHandlers,
   ResearchStreamHandlers,
   ResearchThread,
   ResearchThreadUpdate,
@@ -125,6 +126,38 @@ export class ApiClient {
 
   async getResearchRun(runId: string): Promise<ResearchRun> {
     return this.request<ResearchRun>(`/api/research/runs/${encodeURIComponent(runId)}`);
+  }
+
+  async streamResearchRun(
+    runId: string,
+    handlers: ResearchRunStreamHandlers = {}
+  ): Promise<ResearchResult> {
+    const params = new URLSearchParams();
+    if (handlers.afterSeq && handlers.afterSeq > 0) {
+      params.set('after_seq', String(handlers.afterSeq));
+    }
+    const queryString = params.toString();
+    const response = await fetch(
+      `${this.baseUrl}/api/research/runs/${encodeURIComponent(runId)}/stream${queryString ? `?${queryString}` : ''}`,
+      {
+        method: 'GET',
+        headers: this.headers(),
+        signal: handlers.signal,
+      },
+    );
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        detail: 'Research run stream failed',
+      }));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error('Research run stream response was empty');
+    }
+
+    return this.readResearchStream(response.body, handlers);
   }
 
   async listResearchThreads(): Promise<ResearchThread[]> {

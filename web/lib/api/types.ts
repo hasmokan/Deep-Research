@@ -141,6 +141,10 @@ export interface ResearchStreamHandlers {
   signal?: AbortSignal;
 }
 
+export interface ResearchRunStreamHandlers extends ResearchStreamHandlers {
+  afterSeq?: number;
+}
+
 export interface Document {
   id: number;
   content: string;

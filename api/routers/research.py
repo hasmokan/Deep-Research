@@ -13,10 +13,16 @@ from services.research_runs import research_run_store
 from services.research_threads import research_thread_store
 from services.vector_store import get_vector_store
 from datetime import datetime
+import asyncio
 import json
 import uuid
 
 router = APIRouter(prefix="/api/research", tags=["research"])
+_background_research_tasks: set[asyncio.Task] = set()
+
+
+def _is_terminal_run_status(status: str | None) -> bool:
+    return status in {"completed", "failed", "stopped"}
 
 
 def _user_id(current_user: AuthenticatedUser) -> str:
@@ -146,6 +152,91 @@ def _format_sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+def _persisted_event_to_sse(event: dict) -> str:
+    event_name = str(event.get("event") or "message")
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    return _format_sse_event(event_name, data)
+
+
+async def _run_research_to_store(
+    contextual_query: str,
+    *,
+    run_id: str,
+    user_id: str,
+    display_query: str | None = None,
+    latest_result: dict | None = None,
+) -> None:
+    try:
+        async for _event in stream_research_events(
+            contextual_query,
+            run_id=run_id,
+            display_query=display_query,
+            store=research_run_store,
+            latest_result=latest_result,
+            on_complete=lambda result: _remember_result(user_id, result),
+        ):
+            pass
+    except asyncio.CancelledError:
+        research_run_store.append_event(run_id, "stopped", {"status": "stopped"})
+        raise
+    except Exception as exc:
+        research_run_store.append_event(
+            run_id,
+            "stream_error",
+            {"detail": f"Research execution failed: {exc}"},
+        )
+
+
+def start_research_run_background(
+    contextual_query: str,
+    *,
+    run_id: str,
+    user_id: str,
+    display_query: str | None = None,
+    latest_result: dict | None = None,
+) -> asyncio.Task:
+    task = asyncio.create_task(
+        _run_research_to_store(
+            contextual_query,
+            run_id=run_id,
+            user_id=user_id,
+            display_query=display_query,
+            latest_result=latest_result,
+        )
+    )
+    _background_research_tasks.add(task)
+    task.add_done_callback(_background_research_tasks.discard)
+    return task
+
+
+async def stream_persisted_research_run_events(
+    run_id: str,
+    user_id: str,
+    store=None,
+    after_seq: int = 0,
+):
+    event_store = store or research_run_store
+    next_seq = max(1, after_seq + 1)
+
+    while True:
+        run = event_store.get_run(run_id, user_id=user_id)
+        if run is None:
+            yield _format_sse_event("stream_error", {"detail": f"Research run {run_id} not found"})
+            return
+
+        for event in run.get("events", []):
+            seq = int(event.get("seq") or 0)
+            if seq < next_seq:
+                continue
+            yield _persisted_event_to_sse(event)
+            next_seq = max(next_seq, seq + 1)
+
+        if _is_terminal_run_status(run.get("status")):
+            return
+
+        await asyncio.sleep(0.5)
+
+
 @router.get("/stream")
 async def stream_research(
     query: str = Query(..., min_length=1, max_length=500),
@@ -156,19 +247,14 @@ async def stream_research(
     """
     user_id = _user_id(current_user)
     run = research_run_store.create_run(query, user_id=user_id)
-
-    async def events():
-        yield f'event: metadata\ndata: {{"run_id":"{run["run_id"]}"}}\n\n'
-        async for event in stream_research_events(
-            query,
-            run_id=run["run_id"],
-            store=research_run_store,
-            on_complete=lambda result: _remember_result(user_id, result),
-        ):
-            yield event
+    start_research_run_background(
+        query,
+        run_id=run["run_id"],
+        user_id=user_id,
+    )
 
     return StreamingResponse(
-        events(),
+        stream_persisted_research_run_events(run["run_id"], user_id, store=research_run_store),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -194,21 +280,16 @@ async def stream_research_post(
         memory_context=_memory_context_for_user(user_id),
     )
     run = research_run_store.create_run(request.query, user_id=user_id)
-
-    async def events():
-        yield f'event: metadata\ndata: {{"run_id":"{run["run_id"]}"}}\n\n'
-        async for event in stream_research_events(
-            contextual_query,
-            run_id=run["run_id"],
-            display_query=request.query,
-            store=research_run_store,
-            latest_result=request.latest_result,
-            on_complete=lambda result: _remember_result(user_id, result),
-        ):
-            yield event
+    start_research_run_background(
+        contextual_query,
+        run_id=run["run_id"],
+        user_id=user_id,
+        display_query=request.query,
+        latest_result=request.latest_result,
+    )
 
     return StreamingResponse(
-        events(),
+        stream_persisted_research_run_events(run["run_id"], user_id, store=research_run_store),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -235,6 +316,36 @@ async def get_research_run(
         raise HTTPException(status_code=404, detail=f"Research run {run_id} not found")
 
     return run
+
+
+@router.get("/runs/{run_id}/stream")
+async def stream_research_run(
+    run_id: str,
+    after_seq: int = Query(0, ge=0),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Subscribe to a persisted research run, replaying prior events before live updates.
+    """
+    try:
+        research_run_store.get_run(run_id, user_id=_user_id(current_user))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return StreamingResponse(
+        stream_persisted_research_run_events(
+            run_id,
+            _user_id(current_user),
+            store=research_run_store,
+            after_seq=after_seq,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/threads")

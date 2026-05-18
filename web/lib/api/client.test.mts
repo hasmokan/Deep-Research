@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-// @ts-expect-error Node's test runner imports the TypeScript source directly here.
 import { ApiClient } from './client.ts';
-import type { ResearchPlanResponse, ResearchPlanStreamStatus } from './types';
+import type { ResearchPlanResponse, ResearchPlanStreamStatus, ResearchResult } from './types';
 
 test('streamResearchPlan reads status events and returns the completed plan', async () => {
   const originalFetch = globalThis.fetch;
@@ -119,6 +118,55 @@ test('stream methods send the current bearer token', async () => {
     client.setAccessTokenProvider(() => 'token-123');
 
     await client.streamResearchPlan({ query: plan.query });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('streamResearchRun reconnects to a persisted run event stream', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const statuses: Array<{ stage: 'search'; label: string; message: string }> = [];
+  const result: ResearchResult = {
+    query: 'test query',
+    documents: [],
+    analysis: null,
+    report: '# Report',
+    result_type: 'report',
+    status: 'completed',
+  };
+
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, 'http://api.test/api/research/runs/run-123/stream');
+    assert.equal(init?.method, 'GET');
+    assert.equal(init?.headers && new Headers(init.headers).get('Authorization'), 'Bearer token-123');
+
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: status\ndata: {"stage":"search","label":"Searching","message":"Searching web."}\n\n'));
+        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.close();
+      },
+    });
+
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    client.setAccessTokenProvider(() => 'token-123');
+
+    const restoredResult = await client.streamResearchRun('run-123', {
+      onStatus: (status) => statuses.push(status),
+    });
+
+    assert.deepEqual(statuses, [
+      { stage: 'search', label: 'Searching', message: 'Searching web.' },
+    ]);
+    assert.deepEqual(restoredResult, result);
   } finally {
     globalThis.fetch = originalFetch;
   }

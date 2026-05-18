@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { getAuthCallbackRedirectPath } from '@/lib/auth/callback-redirect';
 import { getSupabaseClient } from '@/lib/auth/supabase';
 
 export function AuthCallbackPage() {
@@ -15,7 +16,7 @@ export function AuthCallbackPage() {
         await getSupabaseClient().auth.exchangeCodeForSession(code);
       }
 
-      router.replace('/ds');
+      router.replace(getAuthCallbackRedirectPath(window.location.origin));
     };
 
     void completeSignIn();

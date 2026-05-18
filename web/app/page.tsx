@@ -45,6 +45,10 @@ import {
 } from '@/lib/research/research-workflow';
 import {
   createResearchSession,
+  getResearchSessionsStorageKey,
+  readResearchSessionSnapshot,
+  restoreResearchSessionSnapshot,
+  saveResearchSessionSnapshot,
   updateResearchSessionMessages,
   upsertResearchSession,
   type ResearchSession,
@@ -176,8 +180,11 @@ export default function Home() {
   const [isPlanning, setPlanning] = useState(false);
   const [isDeepResearchMode, setDeepResearchMode] = useState(true);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const recoveryAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
   const authSessionRef = useRef<Session | null>(null);
+  const loadedSessionsUserIdRef = useRef<string | null>(null);
+  const loadingSessionsUserIdRef = useRef<string | null>(null);
   const activeResearchRef = useRef<{ sessionId: string; messageId: string } | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const messagesRef = useRef<ConversationMessage[]>([]);
@@ -221,11 +228,56 @@ export default function Home() {
     hasPlan: Boolean(activePlan),
   });
 
+  const saveAuthenticatedSessionSnapshot = useCallback((
+    nextSessions: ResearchSession[],
+    nextActiveSessionId: string | null = activeSessionIdRef.current,
+  ) => {
+    const userId = authSessionRef.current?.user.id;
+
+    if (!userId) {
+      return;
+    }
+
+    try {
+      saveResearchSessionSnapshot(window.localStorage, {
+        activeSessionId: nextActiveSessionId,
+        sessions: nextSessions,
+      }, getResearchSessionsStorageKey(userId));
+    } catch {
+      // Local cache is a fast restore path only; backend persistence remains authoritative.
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
+    const applyRestoredSessions = (
+      restoredSessions: ResearchSession[],
+      nextActiveSessionId: string | null = restoredSessions[0]?.id ?? null,
+    ) => {
+      const activeSession = restoredSessions.find((session) => session.id === nextActiveSessionId)
+        ?? restoredSessions[0]
+        ?? null;
+      const resolvedActiveSessionId = activeSession?.id ?? null;
+
+      sessionsRef.current = restoredSessions;
+      activeSessionIdRef.current = resolvedActiveSessionId;
+      messagesRef.current = activeSession?.messages ?? [];
+      setSessions(restoredSessions);
+      setActiveSessionId(resolvedActiveSessionId);
+      setMessages(activeSession?.messages ?? []);
+      setQuery(activeSession?.title === 'New chat' ? '' : activeSession?.title ?? '');
+      setResult(activeSession?.latestResult ?? null);
+      setDeepResearchMode(!activeSession?.latestResult);
+      setAuthError(null);
+    };
+
     const clearResearchState = () => {
       abortControllerRef.current?.abort();
+      recoveryAbortControllersRef.current.forEach((controller) => controller.abort());
+      recoveryAbortControllersRef.current.clear();
+      loadedSessionsUserIdRef.current = null;
+      loadingSessionsUserIdRef.current = null;
       activeResearchRef.current = null;
       activeSessionIdRef.current = null;
       messagesRef.current = [];
@@ -260,31 +312,50 @@ export default function Home() {
         return;
       }
 
+      const userId = nextSession.user.id;
+      const storageKey = getResearchSessionsStorageKey(userId);
+
+      if (loadedSessionsUserIdRef.current === userId) {
+        setHasLoadedSessions(true);
+        setAuthError(null);
+        return;
+      }
+
+      if (loadingSessionsUserIdRef.current === userId) {
+        setAuthError(null);
+        return;
+      }
+
+      const localSnapshot = readResearchSessionSnapshot(window.localStorage, storageKey);
+      if (localSnapshot) {
+        const localState = restoreResearchSessionSnapshot(localSnapshot);
+        applyRestoredSessions(localState.sessions, localState.activeSessionId);
+        loadedSessionsUserIdRef.current = userId;
+        setHasLoadedSessions(true);
+        return;
+      }
+
+      loadingSessionsUserIdRef.current = userId;
       setHasLoadedSessions(false);
 
       try {
         const restoredSessions = (await apiClient.listResearchThreads()).map(sessionFromThread);
-        const activeSession = restoredSessions[0] ?? null;
-        const nextActiveSessionId = activeSession?.id ?? null;
+        const nextActiveSessionId = restoredSessions[0]?.id ?? null;
 
         if (cancelled) {
           return;
         }
 
-        sessionsRef.current = restoredSessions;
-        activeSessionIdRef.current = nextActiveSessionId;
-        messagesRef.current = activeSession?.messages ?? [];
-        setSessions(restoredSessions);
-        setActiveSessionId(nextActiveSessionId);
-        setMessages(activeSession?.messages ?? []);
-        setQuery(activeSession?.title === 'New chat' ? '' : activeSession?.title ?? '');
-        setResult(activeSession?.latestResult ?? null);
-        setDeepResearchMode(!activeSession?.latestResult);
-        setAuthError(null);
+        applyRestoredSessions(restoredSessions, nextActiveSessionId);
+        saveAuthenticatedSessionSnapshot(restoredSessions, nextActiveSessionId);
+        loadedSessionsUserIdRef.current = userId;
       } catch (sessionError) {
         clearResearchState();
         setAuthError(sessionError instanceof Error ? sessionError.message : 'Unable to load your research sessions');
       } finally {
+        if (loadingSessionsUserIdRef.current === userId) {
+          loadingSessionsUserIdRef.current = null;
+        }
         if (!cancelled) {
           setHasLoadedSessions(true);
         }
@@ -312,7 +383,7 @@ export default function Home() {
       cancelled = true;
       data.subscription.unsubscribe();
     };
-  }, [resetStream, setError, setLoading, setQuery, setResult]);
+  }, [resetStream, saveAuthenticatedSessionSnapshot, setError, setLoading, setQuery, setResult]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -349,11 +420,12 @@ export default function Home() {
 
     sessionsRef.current = nextSessions;
     setSessions(nextSessions);
+    saveAuthenticatedSessionSnapshot(nextSessions, activeSessionIdRef.current);
     void apiClient.saveResearchThread(updatedSession.id, threadUpdateFromSession(updatedSession))
       .catch((saveError) => {
         setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
       });
-  }, [setError]);
+  }, [saveAuthenticatedSessionSnapshot, setError]);
 
   const saveActiveSessionMessages = (nextMessages: ConversationMessage[]) => {
     if (!activeSessionIdRef.current && nextMessages.length === 0) {
@@ -375,6 +447,7 @@ export default function Home() {
     sessionsRef.current = nextSessions;
     setActiveSessionId(updatedSession.id);
     setSessions(nextSessions);
+    saveAuthenticatedSessionSnapshot(nextSessions, updatedSession.id);
     void apiClient.saveResearchThread(updatedSession.id, threadUpdateFromSession(updatedSession))
       .catch((saveError) => {
         setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
@@ -436,6 +509,14 @@ export default function Home() {
     }
 
     void Promise.all(pendingActivities.map(async (activity) => {
+      if (recoveryAbortControllersRef.current.has(activity.runId)) {
+        return;
+      }
+
+      const abortController = new AbortController();
+      recoveryAbortControllersRef.current.set(activity.runId, abortController);
+      const isActiveActivity = activeSessionIdRef.current === activity.sessionId;
+
       try {
         const run = await apiClient.getResearchRun(activity.runId);
         updateResearchActivityMessage(
@@ -443,15 +524,91 @@ export default function Home() {
           activity.messageId,
           (message) => applyResearchRunToActivityMessage(message, run),
         );
+
+        if (run.status !== 'running') {
+          return;
+        }
+
+        if (isActiveActivity) {
+          setLoading(true);
+        }
+
+        const afterSeq = run.events.at(-1)?.seq ?? 0;
+        const researchResult = await apiClient.streamResearchRun(
+          activity.runId,
+          {
+            afterSeq,
+            onStatus: (status) => {
+              addStreamStatus(status);
+              updateResearchActivityMessage(
+                activity.sessionId,
+                activity.messageId,
+                (message) => appendResearchActivityStatus(message, status),
+              );
+            },
+            onTrace: (trace) => {
+              addStreamTrace(trace);
+              updateResearchActivityMessage(
+                activity.sessionId,
+                activity.messageId,
+                (message) => appendResearchActivityTrace(message, trace),
+              );
+            },
+            onDocuments: (documents) => {
+              setStreamDocuments(documents);
+              updateResearchActivityMessage(
+                activity.sessionId,
+                activity.messageId,
+                (message) => appendResearchActivityDocuments(message, documents),
+              );
+            },
+            onThinking: (thinking) => {
+              addStreamThinking(thinking);
+              updateResearchActivityMessage(
+                activity.sessionId,
+                activity.messageId,
+                (message) => appendResearchActivityThinking(message, thinking),
+              );
+            },
+            signal: abortController.signal,
+          },
+        );
+
+        updateResearchActivityMessage(
+          activity.sessionId,
+          activity.messageId,
+          (message) => completeResearchActivityMessage(message, researchResult),
+        );
+        if (isActiveActivity) {
+          setResult(researchResult);
+          setDeepResearchMode(false);
+        }
       } catch {
+        if (abortController.signal.aborted) {
+          return;
+        }
         updateResearchActivityMessage(
           activity.sessionId,
           activity.messageId,
           (message) => updateResearchActivityMessageStatus(message, 'stopped'),
         );
+      } finally {
+        recoveryAbortControllersRef.current.delete(activity.runId);
+        if (isActiveActivity) {
+          setLoading(false);
+        }
       }
     }));
-  }, [hasLoadedSessions, updateResearchActivityMessage]);
+  }, [
+    addStreamStatus,
+    addStreamThinking,
+    addStreamTrace,
+    hasLoadedSessions,
+    setLoading,
+    setResult,
+    setStreamDocuments,
+    updateResearchActivityMessage,
+  ]);
 
   const activateSession = (session: ResearchSession) => {
     abortControllerRef.current?.abort();
@@ -482,6 +639,7 @@ export default function Home() {
 
     sessionsRef.current = nextSessions;
     setSessions(nextSessions);
+    saveAuthenticatedSessionSnapshot(nextSessions, session.id);
     void apiClient.saveResearchThread(session.id, threadUpdateFromSession(session))
       .catch((saveError) => {
         setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
