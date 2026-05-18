@@ -342,6 +342,8 @@ export class ApiClient {
       handlers.onAnalysis?.(payload.analysis ?? null);
     } else if (event === 'report') {
       handlers.onReport?.(payload.report ?? null);
+    } else if (event === 'answer_delta') {
+      handlers.onAnswerDelta?.(payload.delta ?? '');
     } else if (event === 'answer') {
       handlers.onAnswer?.(payload.answer ?? null);
     } else if (event === 'complete') {

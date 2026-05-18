@@ -97,14 +97,14 @@ export interface ResearchPlanStreamHandlers {
 }
 
 export interface ResearchStreamStatus {
-  stage: 'search' | 'analyze' | 'report';
+  stage: 'route' | 'answer' | 'coding' | 'search' | 'analyze' | 'report';
   label: string;
   message: string;
 }
 
 export interface ResearchStreamThinking {
   id?: string;
-  stage: 'analyze' | 'report';
+  stage: 'answer' | 'coding' | 'analyze' | 'report';
   label: string;
   text: string;
 }
@@ -120,7 +120,7 @@ export interface ResearchStreamTraceDocument {
 
 export interface ResearchStreamTrace {
   id: string;
-  stage: 'search' | 'analyze' | 'report';
+  stage: 'route' | 'answer' | 'coding' | 'search' | 'analyze' | 'report';
   kind: 'tool_call' | 'tool_result' | 'reasoning';
   title: string;
   detail: string;
@@ -137,6 +137,7 @@ export interface ResearchStreamHandlers {
   onThinking?: (thinking: ResearchStreamThinking) => void;
   onAnalysis?: (analysis: string | null) => void;
   onReport?: (report: string | null) => void;
+  onAnswerDelta?: (delta: string) => void;
   onAnswer?: (answer: string | null) => void;
   signal?: AbortSignal;
 }

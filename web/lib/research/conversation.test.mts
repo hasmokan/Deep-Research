@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  appendAssistantAnswerDelta,
   appendResearchActivityThinking,
   appendResearchActivityStatus,
   appendResearchActivityDocuments,
@@ -99,6 +100,37 @@ test('assistant research activity messages keep stream status for session restor
   assert.equal(updatedMessage.researchActivity?.status, 'running');
   assert.equal(updatedMessage.researchActivity?.streamStatuses.length, 1);
   assert.equal(updatedMessage.researchActivity?.updatedAt, '2026-05-16T10:01:00.000Z');
+});
+
+test('assistant research activity messages keep direct-answer agent stages', () => {
+  const activityMessage = createAssistantResearchActivityMessage('帮我写一段力扣代码', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const withRoute = appendResearchActivityStatus(
+    activityMessage,
+    {
+      stage: 'route',
+      label: 'Understanding',
+      message: 'Classifying the request.',
+    },
+    '2026-05-16T10:01:00.000Z',
+  );
+  const withCoding = appendResearchActivityStatus(
+    withRoute,
+    {
+      stage: 'coding',
+      label: 'Solving',
+      message: 'Writing a direct coding answer.',
+    },
+    '2026-05-16T10:01:01.000Z',
+  );
+
+  assert.deepEqual(
+    withCoding.researchActivity?.streamStatuses.map((status) => status.stage),
+    ['route', 'coding'],
+  );
 });
 
 test('assistant research activity messages keep streamed source documents', () => {
@@ -294,6 +326,43 @@ test('artifact follow-up answers become inline assistant messages without resear
   assert.equal(completedMessage.researchActivity, undefined);
   assert.match(completedMessage.content, /https:\/\/example.com\/report/);
   assert.match(history[1].content, /上一份报告使用了这些来源/);
+});
+
+test('streamed answer deltas render as the assistant message before completion', () => {
+  const activityMessage = createAssistantResearchActivityMessage('帮我写一段力扣代码', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const firstDelta = appendAssistantAnswerDelta(
+    activityMessage,
+    '```python\n',
+    '2026-05-16T10:01:00.000Z',
+  );
+  const secondDelta = appendAssistantAnswerDelta(
+    firstDelta,
+    'print("ok")\n```',
+    '2026-05-16T10:01:01.000Z',
+  );
+  const completedMessage = completeResearchActivityMessage(
+    secondDelta,
+    {
+      query: '帮我写一段力扣代码',
+      documents: [],
+      analysis: null,
+      report: null,
+      answer: '```python\nprint("ok")\n```',
+      result_type: 'answer',
+      status: 'completed',
+    },
+    '2026-05-16T10:01:02.000Z',
+  );
+
+  assert.equal(secondDelta.result?.result_type, 'answer');
+  assert.equal(secondDelta.result?.answer, '```python\nprint("ok")\n```');
+  assert.equal(secondDelta.researchActivity?.status, 'running');
+  assert.equal(completedMessage.content, '```python\nprint("ok")\n```');
+  assert.equal(completedMessage.researchActivity, undefined);
 });
 
 test('buildResearchRequestMessages skips activity-only assistant messages', () => {

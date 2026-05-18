@@ -48,6 +48,8 @@ interface CreateAssistantResearchActivityMessageOptions {
 
 const DEFAULT_MAX_MESSAGES = 8;
 const DEFAULT_MAX_CONTENT_LENGTH = 3000;
+const RESEARCH_STREAM_STAGES = new Set(['route', 'answer', 'coding', 'search', 'analyze', 'report']);
+const RESEARCH_THINKING_STAGES = new Set(['answer', 'coding', 'analyze', 'report']);
 
 function createMessageId(prefix: ConversationRole) {
   if (globalThis.crypto?.randomUUID) {
@@ -92,7 +94,7 @@ function isResearchStreamStatus(value: unknown): value is ResearchStreamStatus {
 
   const status = value as ResearchStreamStatus;
   return (
-    (status.stage === 'search' || status.stage === 'analyze' || status.stage === 'report') &&
+    RESEARCH_STREAM_STAGES.has(status.stage) &&
     typeof status.label === 'string' &&
     typeof status.message === 'string'
   );
@@ -105,7 +107,7 @@ function isResearchStreamThinking(value: unknown): value is ResearchStreamThinki
 
   const thinking = value as ResearchStreamThinking;
   return (
-    (thinking.stage === 'analyze' || thinking.stage === 'report') &&
+    RESEARCH_THINKING_STAGES.has(thinking.stage) &&
     typeof thinking.label === 'string' &&
     typeof thinking.text === 'string'
   );
@@ -151,7 +153,7 @@ function isResearchStreamTrace(value: unknown): value is ResearchStreamTrace {
 
   const trace = value as ResearchStreamTrace;
   return (
-    (trace.stage === 'search' || trace.stage === 'analyze' || trace.stage === 'report') &&
+    RESEARCH_STREAM_STAGES.has(trace.stage) &&
     typeof trace.kind === 'string' &&
     typeof trace.title === 'string' &&
     typeof trace.detail === 'string'
@@ -169,6 +171,14 @@ function isResearchResult(value: unknown): value is ResearchResult {
     Array.isArray(result.documents) &&
     typeof result.status === 'string'
   );
+}
+
+function isAnswerDeltaEventData(value: unknown): value is { delta: string } {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  return typeof (value as { delta?: unknown }).delta === 'string';
 }
 
 function getMessageRequestContent(message: ConversationMessage) {
@@ -331,6 +341,44 @@ export function appendResearchActivityTrace(
   };
 }
 
+export function appendAssistantAnswerDelta(
+  message: ConversationMessage,
+  delta: string,
+  now: string = getNow(),
+): ConversationMessage {
+  if (!delta) {
+    return message;
+  }
+
+  const previousAnswer = message.result?.result_type === 'answer'
+    ? message.result.answer ?? message.content
+    : '';
+  const answer = `${previousAnswer}${delta}`;
+
+  return {
+    ...message,
+    content: answer,
+    result: {
+      query: message.researchActivity?.query ?? message.result?.query ?? '',
+      documents: message.result?.documents ?? [],
+      analysis: message.result?.analysis ?? null,
+      analysis_thinking: message.result?.analysis_thinking,
+      report: message.result?.report ?? null,
+      report_thinking: message.result?.report_thinking,
+      answer,
+      result_type: 'answer',
+      status: 'running',
+    },
+    researchActivity: message.researchActivity
+      ? {
+          ...message.researchActivity,
+          status: 'running',
+          updatedAt: now,
+        }
+      : message.researchActivity,
+  };
+}
+
 export function completeResearchActivityMessage(
   message: ConversationMessage,
   result: ResearchResult,
@@ -452,6 +500,10 @@ function applyResearchRunEvent(
 
   if (event.event === 'documents' && isResearchDocumentArray(event.data.documents)) {
     return appendResearchActivityDocuments(message, event.data.documents, updatedAt);
+  }
+
+  if (event.event === 'answer_delta' && isAnswerDeltaEventData(event.data)) {
+    return appendAssistantAnswerDelta(message, event.data.delta, updatedAt);
   }
 
   if (event.event === 'complete' && isResearchResult(event.data)) {

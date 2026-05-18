@@ -36,9 +36,15 @@ class _FakePrompt:
 
 class _FakeChain:
     response = SimpleNamespace(content="ok", additional_kwargs={})
+    chunks = None
 
     async def ainvoke(self, payload):
         return self.response
+
+    async def astream(self, payload):
+        chunks = self.chunks or [self.response]
+        for chunk in chunks:
+            yield chunk
 
 
 def _fake_intent_response(intent: str):
@@ -46,6 +52,7 @@ def _fake_intent_response(intent: str):
         content=json.dumps({"intent": intent, "reason": "test route"}),
         additional_kwargs={},
     )
+    _FakeChain.chunks = None
 
 
 async def _classify_with_fake_llm(conversation_router, state, intent: str):
@@ -222,6 +229,54 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
         self.assertEqual(answer_state["result_type"], "answer")
         self.assertEqual(answer_state["answer"], "这是一份报告摘要。")
 
+    async def test_first_turn_coding_request_streams_answer_without_web_search(self):
+        from agents.nodes import conversation_router
+        from agents.research_stream import stream_research_events
+
+        _FakeChain.response = SimpleNamespace(content="```python\nprint('ok')\n```", additional_kwargs={})
+        _FakeChain.chunks = [
+            SimpleNamespace(content="```python\n", additional_kwargs={}),
+            SimpleNamespace(content="print('ok')\n```", additional_kwargs={}),
+        ]
+        with (
+            patch.object(conversation_router.ChatPromptTemplate, "from_messages", return_value=_FakePrompt()),
+            patch.object(conversation_router, "ChatOpenAI"),
+            patch("agents.research_stream.web_search_node", side_effect=AssertionError("should not search")),
+        ):
+            events = [
+                event
+                async for event in stream_research_events(
+                    "帮我写一段力扣代码",
+                    display_query="帮我写一段力扣代码",
+                )
+            ]
+
+        status_events = [event for event in events if event.startswith("event: status")]
+        status_payloads = [json.loads(event.split("data: ", 1)[1]) for event in status_events]
+        delta_events = [event for event in events if event.startswith("event: answer_delta")]
+        deltas = [json.loads(event.split("data: ", 1)[1])["delta"] for event in delta_events]
+        complete_events = [event for event in events if event.startswith("event: complete")]
+        payload = json.loads(complete_events[0].split("data: ", 1)[1])
+
+        self.assertIn({"stage": "route", "label": "Understanding", "message": "Classifying the request."}, status_payloads)
+        self.assertTrue(any(status["stage"] == "coding" for status in status_payloads))
+        self.assertEqual(deltas, ["```python\n", "print('ok')\n```"])
+        self.assertEqual(payload["result_type"], "answer")
+        self.assertIn("print('ok')", payload["answer"])
+        _FakeChain.chunks = None
+
+    async def test_public_identity_question_still_routes_to_web_research(self):
+        from agents.nodes import conversation_router
+
+        routed_state = await conversation_router.classify_research_intent_node({
+            "query": "谁是hasmokan",
+            "display_query": "谁是hasmokan",
+            "latest_result": None,
+        })
+
+        self.assertEqual(routed_state["intent"], "new_research")
+        self.assertEqual(conversation_router.route_research_intent(routed_state), "web_search")
+
 
 class FollowUpResearchRouteTests(TestCase):
     def test_execute_research_passes_latest_result_to_agent_state(self):
@@ -256,6 +311,14 @@ class FollowUpResearchRouteTests(TestCase):
 
         self.assertEqual(result["result_type"], "answer")
         self.assertIn("https://example.com/report", result["answer"])
+
+    def test_coding_request_plan_is_skipped(self):
+        from agents.nodes.plan import assess_research_plan_need
+
+        result = asyncio.run(assess_research_plan_need("帮我写一段力扣代码"))
+
+        self.assertFalse(result["should_plan"])
+        self.assertIn("coding", result["reason"])
 
 
 class EmptyMemoryStore:

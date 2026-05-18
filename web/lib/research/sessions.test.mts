@@ -6,6 +6,8 @@ import {
   getResearchSessionsStorageKey,
   loadResearchSessionSnapshot,
   readResearchSessionSnapshot,
+  researchSessionFromThread,
+  researchThreadUpdateFromSession,
   restoreLocalResearchSessionState,
   saveResearchSessionSnapshot,
   updateResearchSessionMessages,
@@ -28,6 +30,15 @@ const answerResult = {
   report: null,
   answer: '上一份报告使用了这些来源。',
   result_type: 'answer' as const,
+  status: 'completed',
+};
+
+const reportResult = {
+  query: 'AI research tools',
+  documents: [],
+  analysis: 'analysis',
+  report: '# AI research tools',
+  result_type: 'report' as const,
   status: 'completed',
 };
 
@@ -177,6 +188,40 @@ test('readResearchSessionSnapshot distinguishes a saved empty snapshot from miss
   });
   assert.equal(readResearchSessionSnapshot(createMemoryStorage()), null);
   assert.equal(readResearchSessionSnapshot(createMemoryStorage('{')), null);
+});
+
+test('researchSessionFromThread maps API threads into UI sessions with the latest report artifact', () => {
+  const userMessage = createUserMessage('AI research tools');
+  const reportMessage = createAssistantResultMessage(reportResult);
+  const answerMessage = createAssistantResultMessage(answerResult);
+
+  const session = researchSessionFromThread({
+    thread_id: 'thread-1',
+    title: 'AI research tools',
+    messages: [userMessage, reportMessage, answerMessage],
+    created_at: '2026-05-16T10:00:00.000Z',
+    updated_at: '2026-05-16T10:05:00.000Z',
+  });
+
+  assert.equal(session.id, 'thread-1');
+  assert.equal(session.latestResult?.result_type, 'report');
+  assert.equal(session.latestResult?.report, '# AI research tools');
+});
+
+test('researchThreadUpdateFromSession serializes the fields persisted by the API', () => {
+  const session = updateResearchSessionMessages(
+    createResearchSession({
+      id: 'thread-1',
+      now: '2026-05-16T10:00:00.000Z',
+    }),
+    [createUserMessage('AI research tools')],
+    '2026-05-16T10:05:00.000Z',
+  );
+
+  assert.deepEqual(researchThreadUpdateFromSession(session), {
+    title: 'AI research tools',
+    messages: session.messages,
+  });
 });
 
 test('restoreLocalResearchSessionState uses only local storage when no sessions are saved', () => {

@@ -1,4 +1,4 @@
-import type { ResearchResult } from '@/lib/api/types';
+import type { ResearchResult, ResearchThread } from '@/lib/api/types';
 import type { ConversationMessage } from './conversation';
 
 export const RESEARCH_SESSIONS_STORAGE_KEY = 'deepresearch.sessions.v1';
@@ -68,6 +68,13 @@ function getSessionTitle(messages: ConversationMessage[]) {
 }
 
 function getLatestResult(messages: ConversationMessage[]) {
+  return [...messages]
+    .reverse()
+    .find((message) => message.result && message.result.result_type !== 'answer')
+    ?.result ?? null;
+}
+
+function getLatestArtifactResult(messages: ConversationMessage[]) {
   return [...messages]
     .reverse()
     .find((message) => message.result && message.result.result_type !== 'answer')
@@ -150,6 +157,28 @@ export function upsertResearchSession(
   return {
     activeSessionId: snapshot.activeSessionId,
     sessions: sortSessionsByActivity([session, ...remainingSessions]),
+  };
+}
+
+export function researchSessionFromThread(thread: ResearchThread): ResearchSession {
+  const messages = Array.isArray(thread.messages)
+    ? thread.messages as ConversationMessage[]
+    : [];
+
+  return {
+    id: thread.thread_id,
+    title: thread.title || 'New chat',
+    messages,
+    latestResult: getLatestArtifactResult(messages),
+    createdAt: thread.created_at,
+    updatedAt: thread.updated_at,
+  };
+}
+
+export function researchThreadUpdateFromSession(session: ResearchSession) {
+  return {
+    title: session.title,
+    messages: session.messages,
   };
 }
 

@@ -3,6 +3,8 @@
 from typing import TypedDict, Any, Literal, Optional, List, Dict
 from langgraph.graph import StateGraph, END
 from agents.nodes.conversation_router import (
+    answer_coding_node,
+    answer_direct_node,
     answer_from_artifact_node,
     answer_sources_node,
     classify_research_intent_node,
@@ -75,6 +77,8 @@ def build_research_graph() -> Any:
     graph.add_node("classify_intent", classify_research_intent_node)
     graph.add_node("answer_sources", answer_sources_node)
     graph.add_node("answer_from_artifact", answer_from_artifact_node)
+    graph.add_node("answer_coding", answer_coding_node)
+    graph.add_node("answer_direct", answer_direct_node)
     graph.add_node("web_search", web_search_node)
     graph.add_node("analyze", analyze_node)
     graph.add_node("generate", generate_node)
@@ -88,6 +92,8 @@ def build_research_graph() -> Any:
         {
             "answer_sources": "answer_sources",
             "answer_from_artifact": "answer_from_artifact",
+            "answer_coding": "answer_coding",
+            "answer_direct": "answer_direct",
             "web_search": "web_search",
         }
     )
@@ -113,6 +119,8 @@ def build_research_graph() -> Any:
     # Final edge from generate to end
     graph.add_edge("answer_sources", END)
     graph.add_edge("answer_from_artifact", END)
+    graph.add_edge("answer_coding", END)
+    graph.add_edge("answer_direct", END)
     graph.add_edge("generate", END)
 
     return graph.compile()

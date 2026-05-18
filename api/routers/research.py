@@ -46,19 +46,16 @@ async def create_research_plan(
     Generate a query-specific research plan before the full research run.
     """
     try:
-        has_follow_up_context = bool(request.messages) or bool(request.latest_result)
+        plan_need = await assess_research_plan_need(request.query)
 
-        if has_follow_up_context:
-            plan_need = await assess_research_plan_need(request.query)
-
-            if not plan_need["should_plan"]:
-                return ResearchPlanResponse(
-                    query=request.query,
-                    source_label="Conversation",
-                    summary=plan_need.get("reason") or "This follow-up can be answered directly.",
-                    steps=[],
-                    should_plan=False,
-                )
+        if not plan_need["should_plan"]:
+            return ResearchPlanResponse(
+                query=request.query,
+                source_label="Agent",
+                summary=plan_need.get("reason") or "This request can be answered directly.",
+                steps=[],
+                should_plan=False,
+            )
 
         contextual_query = build_contextual_research_query(
             request.query,
@@ -90,26 +87,23 @@ async def stream_research_plan(
                 {
                     "stage": "plan",
                     "label": "Planning",
-                    "message": "Clarifying the research objective and context.",
+                    "message": "Deciding whether this needs a research plan.",
                 },
             )
 
-            has_follow_up_context = bool(request.messages) or bool(request.latest_result)
+            plan_need = await assess_research_plan_need(request.query)
 
-            if has_follow_up_context:
-                plan_need = await assess_research_plan_need(request.query)
-
-                if not plan_need["should_plan"]:
-                    payload = {
-                        "query": request.query,
-                        "source_label": "Conversation",
-                        "summary": plan_need.get("reason") or "This follow-up can be answered directly.",
-                        "steps": [],
-                        "should_plan": False,
-                    }
-                    yield _format_sse_event("plan", payload)
-                    yield _format_sse_event("complete", payload)
-                    return
+            if not plan_need["should_plan"]:
+                payload = {
+                    "query": request.query,
+                    "source_label": "Agent",
+                    "summary": plan_need.get("reason") or "This request can be answered directly.",
+                    "steps": [],
+                    "should_plan": False,
+                }
+                yield _format_sse_event("plan", payload)
+                yield _format_sse_event("complete", payload)
+                return
 
             yield _format_sse_event(
                 "status",

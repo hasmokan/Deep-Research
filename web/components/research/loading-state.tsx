@@ -11,9 +11,11 @@ import {
   CheckCircle2,
   ChevronDown,
   Circle,
+  Code2,
   ExternalLink,
   FileSearch,
   FileText,
+  MessageCircle,
   Sparkles,
   Wrench,
 } from 'lucide-react';
@@ -104,6 +106,12 @@ function getDocumentUrl(document: Document | ResearchStreamTraceDocument) {
 }
 
 function EventIcon({ event, className }: { event: ResearchActivityEvent; className: string }) {
+  if (event.stage === 'coding') {
+    return <Code2 className={className} />;
+  }
+  if (event.stage === 'answer' || event.stage === 'route') {
+    return <MessageCircle className={className} />;
+  }
   if (event.kind === 'tool_call') {
     return <Wrench className={className} />;
   }

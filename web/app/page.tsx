@@ -5,7 +5,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Session } from '@supabase/supabase-js';
 import { CheckCircle2, LogOut, MoreHorizontal, Share, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
@@ -15,14 +14,10 @@ import { ErrorState, LoadingState, ReportSidebar, ResultsDisplay, SearchForm } f
 import { MarkdownContent } from '@/components/research/markdown-content';
 import { ResearchPlanPanel } from '@/components/research/research-plan-panel';
 import { apiClient } from '@/lib/api';
-import type { ResearchResult, ResearchThread } from '@/lib/api/types';
+import type { ResearchResult } from '@/lib/api/types';
+import { getSupabaseClient, isSupabaseAuthConfigured, signInWithGoogle } from '@/lib/auth/supabase';
 import {
-  getAuthSession,
-  getSupabaseClient,
-  isSupabaseAuthConfigured,
-  signInWithGoogle,
-} from '@/lib/auth/supabase';
-import {
+  appendAssistantAnswerDelta,
   appendResearchActivityStatus,
   appendResearchActivityDocuments,
   appendResearchActivityTrace,
@@ -45,14 +40,12 @@ import {
 } from '@/lib/research/research-workflow';
 import {
   createResearchSession,
-  getResearchSessionsStorageKey,
-  readResearchSessionSnapshot,
-  restoreResearchSessionSnapshot,
-  saveResearchSessionSnapshot,
+  researchThreadUpdateFromSession,
   updateResearchSessionMessages,
   upsertResearchSession,
   type ResearchSession,
 } from '@/lib/research/sessions';
+import { useAuthenticatedResearchSessions } from '@/lib/research/use-authenticated-research-sessions';
 import { useResearchStore } from '@/lib/store/research';
 
 function UserBubble({ content }: { content: string }) {
@@ -74,28 +67,6 @@ function getLatestArtifactResult(messages: ConversationMessage[]) {
     .reverse()
     .find((message) => isReportResult(message.result))
     ?.result ?? null;
-}
-
-function sessionFromThread(thread: ResearchThread): ResearchSession {
-  const messages = Array.isArray(thread.messages)
-    ? thread.messages as ConversationMessage[]
-    : [];
-
-  return {
-    id: thread.thread_id,
-    title: thread.title || 'New chat',
-    messages,
-    latestResult: getLatestArtifactResult(messages),
-    createdAt: thread.created_at,
-    updatedAt: thread.updated_at,
-  };
-}
-
-function threadUpdateFromSession(session: ResearchSession) {
-  return {
-    title: session.title,
-    messages: session.messages,
-  };
 }
 
 function AssistantResultMessage({ message }: { message: ConversationMessage }) {
@@ -170,25 +141,13 @@ function AssistantResultMessage({ message }: { message: ConversationMessage }) {
 export default function Home() {
   const [localQuery, setLocalQuery] = useState('');
   const [researchPlan, setResearchPlan] = useState<ResearchPlan | null>(null);
-  const [messages, setMessages] = useState<ConversationMessage[]>([]);
-  const [sessions, setSessions] = useState<ResearchSession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [hasLoadedSessions, setHasLoadedSessions] = useState(false);
-  const [authSession, setAuthSession] = useState<Session | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
   const [isSigningIn, setSigningIn] = useState(false);
   const [isPlanning, setPlanning] = useState(false);
   const [isDeepResearchMode, setDeepResearchMode] = useState(true);
   const abortControllerRef = useRef<AbortController | null>(null);
   const recoveryAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
-  const authSessionRef = useRef<Session | null>(null);
-  const loadedSessionsUserIdRef = useRef<string | null>(null);
-  const loadingSessionsUserIdRef = useRef<string | null>(null);
   const activeResearchRef = useRef<{ sessionId: string; messageId: string } | null>(null);
-  const activeSessionIdRef = useRef<string | null>(null);
-  const messagesRef = useRef<ConversationMessage[]>([]);
-  const sessionsRef = useRef<ResearchSession[]>([]);
   const {
     query,
     isLoading,
@@ -204,6 +163,43 @@ export default function Home() {
     setStreamDocuments,
     addStreamTrace,
   } = useResearchStore();
+
+  const clearResearchUiState = useCallback(() => {
+    abortControllerRef.current?.abort();
+    recoveryAbortControllersRef.current.forEach((controller) => controller.abort());
+    recoveryAbortControllersRef.current.clear();
+    activeResearchRef.current = null;
+    setResearchPlan(null);
+    setLocalQuery('');
+    setQuery('');
+    setResult(null);
+    setPlanning(false);
+  }, [setQuery, setResult]);
+
+  const {
+    activeSessionId,
+    activeSessionIdRef,
+    authError,
+    authSession,
+    hasLoadedSessions,
+    messages,
+    messagesRef,
+    saveAuthenticatedSessionSnapshot,
+    sessions,
+    sessionsRef,
+    setActiveSessionId,
+    setAuthError,
+    setMessages,
+    setSessions,
+  } = useAuthenticatedResearchSessions({
+    onClearResearchState: clearResearchUiState,
+    resetStream,
+    setDeepResearchMode,
+    setError,
+    setLoading,
+    setQuery,
+    setResult,
+  });
 
   const currentQuery = localQuery.trim();
   const activePlan = researchPlan;
@@ -227,175 +223,6 @@ export default function Home() {
     isPlanning,
     hasPlan: Boolean(activePlan),
   });
-
-  const saveAuthenticatedSessionSnapshot = useCallback((
-    nextSessions: ResearchSession[],
-    nextActiveSessionId: string | null = activeSessionIdRef.current,
-  ) => {
-    const userId = authSessionRef.current?.user.id;
-
-    if (!userId) {
-      return;
-    }
-
-    try {
-      saveResearchSessionSnapshot(window.localStorage, {
-        activeSessionId: nextActiveSessionId,
-        sessions: nextSessions,
-      }, getResearchSessionsStorageKey(userId));
-    } catch {
-      // Local cache is a fast restore path only; backend persistence remains authoritative.
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const applyRestoredSessions = (
-      restoredSessions: ResearchSession[],
-      nextActiveSessionId: string | null = restoredSessions[0]?.id ?? null,
-    ) => {
-      const activeSession = restoredSessions.find((session) => session.id === nextActiveSessionId)
-        ?? restoredSessions[0]
-        ?? null;
-      const resolvedActiveSessionId = activeSession?.id ?? null;
-
-      sessionsRef.current = restoredSessions;
-      activeSessionIdRef.current = resolvedActiveSessionId;
-      messagesRef.current = activeSession?.messages ?? [];
-      setSessions(restoredSessions);
-      setActiveSessionId(resolvedActiveSessionId);
-      setMessages(activeSession?.messages ?? []);
-      setQuery(activeSession?.title === 'New chat' ? '' : activeSession?.title ?? '');
-      setResult(activeSession?.latestResult ?? null);
-      setDeepResearchMode(!activeSession?.latestResult);
-      setAuthError(null);
-    };
-
-    const clearResearchState = () => {
-      abortControllerRef.current?.abort();
-      recoveryAbortControllersRef.current.forEach((controller) => controller.abort());
-      recoveryAbortControllersRef.current.clear();
-      loadedSessionsUserIdRef.current = null;
-      loadingSessionsUserIdRef.current = null;
-      activeResearchRef.current = null;
-      activeSessionIdRef.current = null;
-      messagesRef.current = [];
-      sessionsRef.current = [];
-      setSessions([]);
-      setActiveSessionId(null);
-      setMessages([]);
-      setResearchPlan(null);
-      setLocalQuery('');
-      setQuery('');
-      setResult(null);
-      setDeepResearchMode(true);
-      setPlanning(false);
-      setLoading(false);
-      setError(null);
-      resetStream();
-    };
-
-    const applyAuthSession = async (nextSession: Session | null) => {
-      authSessionRef.current = nextSession;
-      apiClient.setAccessTokenProvider(() => authSessionRef.current?.access_token ?? null);
-
-      if (cancelled) {
-        return;
-      }
-
-      setAuthSession(nextSession);
-
-      if (!nextSession) {
-        clearResearchState();
-        setHasLoadedSessions(true);
-        return;
-      }
-
-      const userId = nextSession.user.id;
-      const storageKey = getResearchSessionsStorageKey(userId);
-
-      if (loadedSessionsUserIdRef.current === userId) {
-        setHasLoadedSessions(true);
-        setAuthError(null);
-        return;
-      }
-
-      if (loadingSessionsUserIdRef.current === userId) {
-        setAuthError(null);
-        return;
-      }
-
-      const localSnapshot = readResearchSessionSnapshot(window.localStorage, storageKey);
-      if (localSnapshot) {
-        const localState = restoreResearchSessionSnapshot(localSnapshot);
-        applyRestoredSessions(localState.sessions, localState.activeSessionId);
-        loadedSessionsUserIdRef.current = userId;
-        setHasLoadedSessions(true);
-        return;
-      }
-
-      loadingSessionsUserIdRef.current = userId;
-      setHasLoadedSessions(false);
-
-      try {
-        const restoredSessions = (await apiClient.listResearchThreads()).map(sessionFromThread);
-        const nextActiveSessionId = restoredSessions[0]?.id ?? null;
-
-        if (cancelled) {
-          return;
-        }
-
-        applyRestoredSessions(restoredSessions, nextActiveSessionId);
-        saveAuthenticatedSessionSnapshot(restoredSessions, nextActiveSessionId);
-        loadedSessionsUserIdRef.current = userId;
-      } catch (sessionError) {
-        clearResearchState();
-        setAuthError(sessionError instanceof Error ? sessionError.message : 'Unable to load your research sessions');
-      } finally {
-        if (loadingSessionsUserIdRef.current === userId) {
-          loadingSessionsUserIdRef.current = null;
-        }
-        if (!cancelled) {
-          setHasLoadedSessions(true);
-        }
-      }
-    };
-
-    if (!isSupabaseAuthConfigured()) {
-      setAuthError('Supabase Google login is not configured');
-      setHasLoadedSessions(true);
-      return;
-    }
-
-    void getAuthSession()
-      .then(applyAuthSession)
-      .catch((sessionError) => {
-        setAuthError(sessionError instanceof Error ? sessionError.message : 'Unable to read your login session');
-        setHasLoadedSessions(true);
-      });
-
-    const { data } = getSupabaseClient().auth.onAuthStateChange((_event, nextSession) => {
-      void applyAuthSession(nextSession);
-    });
-
-    return () => {
-      cancelled = true;
-      data.subscription.unsubscribe();
-    };
-  }, [resetStream, saveAuthenticatedSessionSnapshot, setError, setLoading, setQuery, setResult]);
-
-  useEffect(() => {
-    sessionsRef.current = sessions;
-  }, [sessions]);
-
-  useEffect(() => {
-    activeSessionIdRef.current = activeSessionId;
-  }, [activeSessionId]);
-
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
 
   useEffect(() => {
     if (hasConversation) {
@@ -421,11 +248,11 @@ export default function Home() {
     sessionsRef.current = nextSessions;
     setSessions(nextSessions);
     saveAuthenticatedSessionSnapshot(nextSessions, activeSessionIdRef.current);
-    void apiClient.saveResearchThread(updatedSession.id, threadUpdateFromSession(updatedSession))
+    void apiClient.saveResearchThread(updatedSession.id, researchThreadUpdateFromSession(updatedSession))
       .catch((saveError) => {
         setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
       });
-  }, [saveAuthenticatedSessionSnapshot, setError]);
+  }, [activeSessionIdRef, saveAuthenticatedSessionSnapshot, sessionsRef, setError, setSessions]);
 
   const saveActiveSessionMessages = (nextMessages: ConversationMessage[]) => {
     if (!activeSessionIdRef.current && nextMessages.length === 0) {
@@ -448,7 +275,7 @@ export default function Home() {
     setActiveSessionId(updatedSession.id);
     setSessions(nextSessions);
     saveAuthenticatedSessionSnapshot(nextSessions, updatedSession.id);
-    void apiClient.saveResearchThread(updatedSession.id, threadUpdateFromSession(updatedSession))
+    void apiClient.saveResearchThread(updatedSession.id, researchThreadUpdateFromSession(updatedSession))
       .catch((saveError) => {
         setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
       });
@@ -485,7 +312,7 @@ export default function Home() {
     }
 
     persistMessagesToSession(sessionId, nextMessages);
-  }, [persistMessagesToSession]);
+  }, [activeSessionIdRef, messagesRef, persistMessagesToSession, sessionsRef, setMessages]);
 
   useEffect(() => {
     if (!hasLoadedSessions) {
@@ -570,6 +397,13 @@ export default function Home() {
                 (message) => appendResearchActivityThinking(message, thinking),
               );
             },
+            onAnswerDelta: (delta) => {
+              updateResearchActivityMessage(
+                activity.sessionId,
+                activity.messageId,
+                (message) => appendAssistantAnswerDelta(message, delta),
+              );
+            },
             signal: abortController.signal,
           },
         );
@@ -600,15 +434,17 @@ export default function Home() {
       }
     }));
   }, [
-    addStreamStatus,
-    addStreamThinking,
-    addStreamTrace,
-    hasLoadedSessions,
-    setLoading,
-    setResult,
-    setStreamDocuments,
-    updateResearchActivityMessage,
-  ]);
+	    addStreamStatus,
+	    addStreamThinking,
+	    addStreamTrace,
+    activeSessionIdRef,
+	    hasLoadedSessions,
+	    setLoading,
+	    setResult,
+	    setStreamDocuments,
+    sessionsRef,
+	    updateResearchActivityMessage,
+	  ]);
 
   const activateSession = (session: ResearchSession) => {
     abortControllerRef.current?.abort();
@@ -640,7 +476,7 @@ export default function Home() {
     sessionsRef.current = nextSessions;
     setSessions(nextSessions);
     saveAuthenticatedSessionSnapshot(nextSessions, session.id);
-    void apiClient.saveResearchThread(session.id, threadUpdateFromSession(session))
+    void apiClient.saveResearchThread(session.id, researchThreadUpdateFromSession(session))
       .catch((saveError) => {
         setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
       });
@@ -838,6 +674,13 @@ export default function Home() {
               runSessionId,
               activityMessage.id,
               (message) => appendResearchActivityThinking(message, thinking),
+            );
+          },
+          onAnswerDelta: (delta) => {
+            updateResearchActivityMessage(
+              runSessionId,
+              activityMessage.id,
+              (message) => appendAssistantAnswerDelta(message, delta),
             );
           },
           signal: abortController.signal,

@@ -13,6 +13,8 @@ from agents.nodes.conversation_router import (
     answer_sources_node,
     classify_research_intent_node,
     route_research_intent,
+    stream_answer_coding_node,
+    stream_answer_direct_node,
 )
 from agents.nodes.generate import stream_generate_node
 from agents.nodes.web_search import web_search_node
@@ -144,6 +146,15 @@ async def stream_research_events(
         )
 
         try:
+            yield record_event(
+                "status",
+                {
+                    "stage": "route",
+                    "label": "Understanding",
+                    "message": "Classifying the request.",
+                },
+            )
+            await asyncio.sleep(0)
             with tracer.start(
                 "intent-routing",
                 as_type="span",
@@ -160,6 +171,94 @@ async def stream_research_events(
                     "route": route,
                     "reason": state.get("reason"),
                 })
+
+            if route == "answer_coding":
+                yield record_event(
+                    "status",
+                    {
+                        "stage": "coding",
+                        "label": "Solving",
+                        "message": "Writing a direct coding answer.",
+                    },
+                )
+                await asyncio.sleep(0)
+                with tracer.start(
+                    "coding-answer-llm",
+                    as_type="span",
+                    input={"query": visible_query},
+                    metadata={"run_id": run_id},
+                ) as answer_observation:
+                    async for answer_event in stream_answer_coding_node(state):
+                        if answer_event.get("type") == "answer_delta":
+                            yield record_event("answer_delta", {"delta": answer_event.get("delta") or ""})
+                            await asyncio.sleep(0)
+                        elif answer_event.get("type") == "thinking":
+                            yield record_event(
+                                "thinking",
+                                {
+                                    "id": answer_event.get("id") or "coding-thinking",
+                                    "stage": answer_event.get("stage") or "coding",
+                                    "label": answer_event.get("label") or "Solution thinking",
+                                    "text": answer_event.get("text") or "",
+                                },
+                            )
+                            await asyncio.sleep(0)
+                        elif answer_event.get("type") == "final":
+                            state.update(answer_event.get("state", {}))
+                    answer_observation.update(output={
+                        "answer_preview": _text_preview(state.get("answer")),
+                        "thinking_preview": _text_preview(state.get("report_thinking")),
+                    })
+                yield record_event("answer", {"answer": state.get("answer")})
+                await asyncio.sleep(0)
+                result_payload = _result_payload(state)
+                run_observation.update(output=_result_observability_summary(result_payload))
+                yield await complete_event(result_payload)
+                return
+
+            if route == "answer_direct":
+                yield record_event(
+                    "status",
+                    {
+                        "stage": "answer",
+                        "label": "Answering",
+                        "message": "Answering directly without a research run.",
+                    },
+                )
+                await asyncio.sleep(0)
+                with tracer.start(
+                    "direct-answer-llm",
+                    as_type="span",
+                    input={"query": visible_query},
+                    metadata={"run_id": run_id},
+                ) as answer_observation:
+                    async for answer_event in stream_answer_direct_node(state):
+                        if answer_event.get("type") == "answer_delta":
+                            yield record_event("answer_delta", {"delta": answer_event.get("delta") or ""})
+                            await asyncio.sleep(0)
+                        elif answer_event.get("type") == "thinking":
+                            yield record_event(
+                                "thinking",
+                                {
+                                    "id": answer_event.get("id") or "direct-answer-thinking",
+                                    "stage": answer_event.get("stage") or "answer",
+                                    "label": answer_event.get("label") or "Answer thinking",
+                                    "text": answer_event.get("text") or "",
+                                },
+                            )
+                            await asyncio.sleep(0)
+                        elif answer_event.get("type") == "final":
+                            state.update(answer_event.get("state", {}))
+                    answer_observation.update(output={
+                        "answer_preview": _text_preview(state.get("answer")),
+                        "thinking_preview": _text_preview(state.get("report_thinking")),
+                    })
+                yield record_event("answer", {"answer": state.get("answer")})
+                await asyncio.sleep(0)
+                result_payload = _result_payload(state)
+                run_observation.update(output=_result_observability_summary(result_payload))
+                yield await complete_event(result_payload)
+                return
 
             if route == "answer_sources":
                 yield record_event(

@@ -44,6 +44,9 @@ async def generate_research_plan(query: str) -> dict[str, Any]:
 async def assess_research_plan_need(query: str) -> dict[str, Any]:
     """Ask the model whether this request needs a reviewable research plan."""
     normalized_query = query.strip()
+    rule_result = _assess_plan_need_by_rules(normalized_query)
+    if rule_result is not None:
+        return rule_result
 
     llm = ChatOpenAI(
         model=settings.llm_model,
@@ -61,6 +64,35 @@ async def assess_research_plan_need(query: str) -> dict[str, Any]:
     payload = _parse_json_payload(content)
 
     return _normalize_plan_need_payload(payload)
+
+
+def _assess_plan_need_by_rules(query: str) -> dict[str, Any] | None:
+    normalized_query = query.lower()
+    coding_terms = (
+        "力扣",
+        "leetcode",
+        "代码",
+        "写一段",
+        "写个",
+        "实现",
+        "函数",
+        "算法",
+        "debug",
+        "bug",
+        "报错",
+        "code",
+        "program",
+        "function",
+        "implement",
+    )
+
+    if any(term in normalized_query for term in coding_terms):
+        return {
+            "should_plan": False,
+            "reason": "This is a coding request and can be answered directly.",
+        }
+
+    return None
 
 
 def _build_research_plan_prompt() -> ChatPromptTemplate:

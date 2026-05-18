@@ -115,6 +115,9 @@ class ConversationResearchRouteTests(TestCase):
             self.assertIsNone(latest_result)
             yield format_sse_event("complete", {"query": display_query, "status": "completed"})
 
+        async def fake_persisted_stream(run_id, user_id, store=None):
+            yield format_sse_event("complete", {"query": "展开第三点", "status": "completed"})
+
         client = TestClient(app)
 
         with patch.object(research.research_run_store, "create_run", return_value={
@@ -125,7 +128,10 @@ class ConversationResearchRouteTests(TestCase):
             "updated_at": "2026-05-17T00:00:00+00:00",
         }):
             with patch.object(research.research_run_store, "append_event"):
-                with patch.object(research, "stream_research_events", fake_stream):
+                with (
+                    patch.object(research, "stream_research_events", fake_stream),
+                    patch.object(research, "stream_persisted_research_run_events", side_effect=fake_persisted_stream),
+                ):
                     response = client.post(
                         "/api/research/stream",
                         json={

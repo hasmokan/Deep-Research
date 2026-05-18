@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { ApiClient } from './client.ts';
-import type { ResearchPlanResponse, ResearchPlanStreamStatus, ResearchResult } from './types';
+import type {
+  ResearchPlanResponse,
+  ResearchPlanStreamStatus,
+  ResearchResult,
+  ResearchStreamStatus,
+} from './types';
 
 test('streamResearchPlan reads status events and returns the completed plan', async () => {
   const originalFetch = globalThis.fetch;
@@ -126,7 +131,7 @@ test('stream methods send the current bearer token', async () => {
 test('streamResearchRun reconnects to a persisted run event stream', async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();
-  const statuses: Array<{ stage: 'search'; label: string; message: string }> = [];
+  const statuses: ResearchStreamStatus[] = [];
   const result: ResearchResult = {
     query: 'test query',
     documents: [],
@@ -137,7 +142,7 @@ test('streamResearchRun reconnects to a persisted run event stream', async () =>
   };
 
   globalThis.fetch = async (url, init) => {
-    assert.equal(url, 'http://api.test/api/research/runs/run-123/stream');
+    assert.equal(url, 'http://api.test/api/research/runs/run-123/stream?after_seq=4');
     assert.equal(init?.method, 'GET');
     assert.equal(init?.headers && new Headers(init.headers).get('Authorization'), 'Bearer token-123');
 
@@ -160,6 +165,7 @@ test('streamResearchRun reconnects to a persisted run event stream', async () =>
     client.setAccessTokenProvider(() => 'token-123');
 
     const restoredResult = await client.streamResearchRun('run-123', {
+      afterSeq: 4,
       onStatus: (status) => statuses.push(status),
     });
 
@@ -167,6 +173,50 @@ test('streamResearchRun reconnects to a persisted run event stream', async () =>
       { stage: 'search', label: 'Searching', message: 'Searching web.' },
     ]);
     assert.deepEqual(restoredResult, result);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('streamResearch forwards answer deltas while preserving final result', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const deltas: string[] = [];
+  const result: ResearchResult = {
+    query: '帮我写一段力扣代码',
+    documents: [],
+    analysis: null,
+    report: null,
+    answer: '```python\nprint("ok")\n```',
+    result_type: 'answer',
+    status: 'completed',
+  };
+
+  globalThis.fetch = async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: answer_delta\ndata: {"delta":"```python\\n"}\n\n'));
+        controller.enqueue(encoder.encode('event: answer_delta\ndata: {"delta":"print(\\"ok\\")\\n```"}\n\n'));
+        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.close();
+      },
+    });
+
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    const streamedResult = await client.streamResearch(
+      { query: '帮我写一段力扣代码' },
+      { onAnswerDelta: (delta) => deltas.push(delta) },
+    );
+
+    assert.deepEqual(deltas, ['```python\n', 'print("ok")\n```']);
+    assert.deepEqual(streamedResult, result);
   } finally {
     globalThis.fetch = originalFetch;
   }
