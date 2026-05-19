@@ -1,0 +1,36 @@
+services:
+  api:
+    build:
+      context: ./api
+    env_file:
+      - ./api/.env
+    environment:
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      RESEARCH_STORAGE_BACKEND: ${RESEARCH_STORAGE_BACKEND:-json}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - api-data:/app/data
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_AUTH_CALLBACK_PATH: ${NEXT_PUBLIC_AUTH_CALLBACK_PATH:-/auth/callback}
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  api-data:
