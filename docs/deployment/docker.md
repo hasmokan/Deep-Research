@@ -23,6 +23,9 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 FRONTEND_URL=http://localhost:3000
 NEXT_PUBLIC_AUTH_CALLBACK_PATH=/auth/callback
 RESEARCH_STORAGE_BACKEND=json
+WATCHFILES_FORCE_POLLING=true
+WATCHPACK_POLLING=true
+CHOKIDAR_USEPOLLING=true
 ```
 
 Set these from `web/.env.local` or your Supabase project settings:
@@ -45,6 +48,41 @@ Local URLs:
 - Web: `http://localhost:3000`
 - API: `http://localhost:8000`
 - API health: `http://localhost:8000/health`
+
+## Local Hot Reload
+
+Use the dev override when editing locally:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+This keeps the production Compose file as the base source of truth and only overrides:
+
+- frontend command: `pnpm dev`
+- backend command: `uvicorn main:app --reload`
+- source mounts: `./web:/app` and `./api:/app`
+- development-only file watcher settings
+
+The frontend dependency folders are stored in Docker volumes so the host project is not polluted:
+
+```text
+web-node-modules
+web-next-cache
+web-pnpm-store
+```
+
+Stop hot reload mode with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+```
+
+Remove dev dependency/cache volumes with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v
+```
 
 ## Server Setup
 
