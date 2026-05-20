@@ -124,6 +124,59 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(thinking_payloads[1]["id"], "report-thinking")
         self.assertEqual(thinking_payloads[1]["text"], "Drafting the report.")
 
+    def test_coding_stream_forwards_sandbox_trace_events(self):
+        from agents import research_stream
+
+        async def fake_coding_node(state):
+            yield {
+                "type": "trace",
+                "stage": "coding",
+                "kind": "tool_call",
+                "title": "Run command",
+                "detail": "Calling sandbox tool: bash",
+                "tool": "bash",
+                "arguments": {"command": "python solution.py"},
+            }
+            yield {
+                "type": "trace",
+                "stage": "coding",
+                "kind": "tool_result",
+                "title": "Run command",
+                "detail": "ok",
+                "tool": "bash",
+                "result": {"ok": True, "content": "ok"},
+            }
+            yield {"type": "answer_delta", "delta": "done"}
+            yield {
+                "type": "final",
+                "state": {
+                    "answer": "done",
+                    "result_type": "answer",
+                    "report_completed": True,
+                },
+            }
+
+        with (
+            patch.object(research_stream, "stream_answer_coding_node", fake_coding_node),
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                return_value={"intent": "coding_help", "reason": "test"},
+            ),
+        ):
+            events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("写代码")))
+
+        trace_payloads = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: trace")
+        ]
+
+        self.assertEqual(trace_payloads[0]["kind"], "tool_call")
+        self.assertEqual(trace_payloads[0]["tool"], "bash")
+        self.assertEqual(trace_payloads[1]["kind"], "tool_result")
+        self.assertEqual(trace_payloads[1]["result"]["content"], "ok")
+
     def test_stream_emits_llm_drafts_as_live_thinking_events(self):
         from agents import research_stream
 

@@ -192,6 +192,29 @@ async def stream_research_events(
                         if answer_event.get("type") == "answer_delta":
                             yield record_event("answer_delta", {"delta": answer_event.get("delta") or ""})
                             await asyncio.sleep(0)
+                        elif answer_event.get("type") == "trace":
+                            yield record_event(
+                                "trace",
+                                _trace_event(
+                                    answer_event.get("stage") or "coding",
+                                    answer_event.get("kind") or "tool_call",
+                                    answer_event.get("title") or "Sandbox tool",
+                                    answer_event.get("detail") or "",
+                                    **{
+                                        key: value
+                                        for key, value in answer_event.items()
+                                        if key
+                                        not in {
+                                            "type",
+                                            "stage",
+                                            "kind",
+                                            "title",
+                                            "detail",
+                                        }
+                                    },
+                                ),
+                            )
+                            await asyncio.sleep(0)
                         elif answer_event.get("type") == "thinking":
                             yield record_event(
                                 "thinking",

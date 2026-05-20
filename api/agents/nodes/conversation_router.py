@@ -6,14 +6,18 @@ import re
 import json
 from typing import Any, Literal
 
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts
+from deerflow.sandbox import LocalSandboxProvider
+from deerflow.sandbox.tools import SandboxToolRunner, sandbox_openai_tool_specs
 from services.langfuse_observability import ainvoke_langchain, astream_langchain, get_langfuse_tracer
 
 
 settings = get_settings()
+_coding_sandbox_provider: LocalSandboxProvider | None = None
 INTENTS = {"source_question", "artifact_follow_up", "coding_help", "direct_answer", "new_research"}
 JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -255,6 +259,21 @@ def route_research_intent(
 
 async def answer_coding_node(state: dict[str, Any]) -> dict[str, Any]:
     """Answer coding and algorithm requests directly without web research."""
+    try:
+        answer_parts: list[str] = []
+        thinking = None
+        async for event in _stream_sandbox_coding_with_tools(state):
+            if event.get("type") == "answer_delta":
+                answer_parts.append(event.get("delta") or "")
+            elif event.get("type") == "thinking":
+                thinking = event.get("text")
+            elif event.get("type") == "final":
+                return event.get("state", {})
+        if answer_parts:
+            return _answer_state("".join(answer_parts), thinking)
+    except Exception:
+        pass
+
     answer, thinking = await _answer_directly_with_llm(
         state,
         system_prompt=_CODING_ANSWER_PROMPT,
@@ -275,6 +294,16 @@ async def answer_direct_node(state: dict[str, Any]) -> dict[str, Any]:
 
 async def stream_answer_coding_node(state: dict[str, Any]):
     """Stream coding answer deltas and yield final answer state."""
+    try:
+        yielded = False
+        async for event in _stream_sandbox_coding_with_tools(state):
+            yielded = True
+            yield event
+        if yielded:
+            return
+    except Exception:
+        pass
+
     async for event in _stream_direct_answer_with_llm(
         state,
         system_prompt=_CODING_ANSWER_PROMPT,
@@ -408,6 +437,119 @@ def _answer_state(answer: str, thinking: str | None) -> dict[str, Any]:
     }
 
 
+async def _stream_sandbox_coding_with_tools(state: dict[str, Any]):
+    provider = _get_coding_sandbox_provider()
+    sandbox_id = provider.acquire(state.get("run_id") or state.get("thread_id"))
+    runner = SandboxToolRunner(provider)
+    llm = ChatOpenAI(
+        model=settings.llm_model,
+        temperature=0.2,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+        extra_body={"reasoning_split": True},
+    )
+    model_with_tools = llm.bind_tools(sandbox_openai_tool_specs())
+    query = state.get("display_query") or state.get("query") or ""
+    messages: list[Any] = [
+        SystemMessage(content=_SANDBOX_CODING_PROMPT),
+        HumanMessage(content=str(query)),
+    ]
+
+    final_answer = ""
+    thinking = None
+
+    for _ in range(4):
+        response = await model_with_tools.ainvoke(
+            messages,
+            _langchain_config("sandbox-coding-llm", "coding"),
+        )
+        tool_calls = list(getattr(response, "tool_calls", None) or [])
+
+        if not tool_calls:
+            final_answer, thinking = extract_response_parts(response)
+            final_answer = final_answer.strip()
+            if final_answer:
+                yield {
+                    "type": "answer_delta",
+                    "delta": final_answer,
+                }
+            yield {
+                "type": "final",
+                "state": _answer_state(final_answer, thinking),
+            }
+            return
+
+        messages.append(response)
+        for tool_call in tool_calls:
+            tool_name = str(tool_call.get("name") or "")
+            tool_args = tool_call.get("args") or {}
+            tool_call_id = str(tool_call.get("id") or tool_name)
+            yield {
+                "type": "trace",
+                "stage": "coding",
+                "kind": "tool_call",
+                "title": _sandbox_tool_title(tool_name),
+                "detail": f"Calling sandbox tool: {tool_name}",
+                "tool": tool_name,
+                "arguments": tool_args,
+                "sandbox_id": sandbox_id,
+            }
+            result = runner.run(sandbox_id, tool_name, tool_args)
+            yield {
+                "type": "trace",
+                "stage": "coding",
+                "kind": "tool_result",
+                "title": _sandbox_tool_title(tool_name),
+                "detail": _sandbox_tool_result_detail(tool_name, result),
+                "tool": tool_name,
+                "result": result,
+                "sandbox_id": sandbox_id,
+            }
+            messages.append(ToolMessage(content=json.dumps(result, ensure_ascii=False), tool_call_id=tool_call_id))
+
+    final_answer = "Sandbox tool execution reached the maximum number of tool rounds before a final answer."
+    yield {
+        "type": "answer_delta",
+        "delta": final_answer,
+    }
+    yield {
+        "type": "final",
+        "state": _answer_state(final_answer, thinking),
+    }
+
+
+def _get_coding_sandbox_provider() -> LocalSandboxProvider:
+    global _coding_sandbox_provider
+    if _coding_sandbox_provider is None:
+        _coding_sandbox_provider = LocalSandboxProvider()
+    return _coding_sandbox_provider
+
+
+def _sandbox_tool_title(tool_name: str) -> str:
+    titles = {
+        "bash": "Run command",
+        "read_file": "Read file",
+        "write_file": "Write file",
+        "list_dir": "List directory",
+        "glob": "Find files",
+        "grep": "Search files",
+    }
+    return titles.get(tool_name, tool_name or "Sandbox tool")
+
+
+def _sandbox_tool_result_detail(tool_name: str, result: dict[str, Any]) -> str:
+    if not result.get("ok"):
+        return f"{tool_name} failed: {result.get('error')}"
+    if "content" in result:
+        content = str(result.get("content") or "")
+        return content[:160] if content else f"{tool_name} completed."
+    if "matches" in result:
+        return f"{len(result.get('matches') or [])} matches returned."
+    if "entries" in result:
+        return f"{len(result.get('entries') or [])} entries returned."
+    return f"{tool_name} completed."
+
+
 _CODING_ANSWER_PROMPT = """You are a pragmatic senior software engineer helping with coding tasks.
 
 Rules:
@@ -415,6 +557,14 @@ Rules:
 - If the user asks for LeetCode code without a specific problem, provide a concise representative solution and ask for the problem number if they need an exact one.
 - Prefer the user's language.
 - Include code when useful and keep the explanation focused."""
+
+
+_SANDBOX_CODING_PROMPT = """You are a pragmatic senior software engineer with access to a sandbox workspace.
+
+Use sandbox tools when they materially help: create files, inspect files, run small commands, test code, search generated files, or debug concrete behavior.
+Do not use sandbox tools for simple conceptual questions that can be answered directly.
+Keep commands small and bounded. Do not access paths outside the sandbox workspace.
+After tool use, summarize what you did and provide the final answer in the user's language."""
 
 
 _DIRECT_ANSWER_PROMPT = """You answer direct user questions without deep-research ceremony.
