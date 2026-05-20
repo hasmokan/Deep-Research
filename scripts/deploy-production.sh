@@ -23,13 +23,6 @@ remote_quote() {
   printf "%q" "$1"
 }
 
-ensure_remote_env() {
-  local key="$1"
-  local value="$2"
-  ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
-    "cd $(remote_quote "$DEPLOY_PROJECT_DIR") && if grep -q '^$(remote_quote "$key")=' .env; then sed -i 's#^$(remote_quote "$key")=.*#$(remote_quote "$key")=$(remote_quote "$value")#' .env; else printf '%s\n' '$(remote_quote "$key")=$(remote_quote "$value")' >> .env; fi"
-}
-
 echo "Preparing remote directories..."
 ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
   "sudo mkdir -p $(remote_quote "$DEPLOY_WEB_DIR") $(remote_quote "$DEPLOY_API_DIR") && sudo chown -R $(remote_quote "$DEPLOY_USER"):$(remote_quote "$DEPLOY_USER") $(remote_quote "$DEPLOY_WEB_DIR") $(remote_quote "$DEPLOY_API_DIR")"
@@ -67,20 +60,32 @@ echo "Checking server environment files..."
 ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
   "test -f $(remote_quote "$DEPLOY_API_DIR")/.env || { echo 'Missing $(remote_quote "$DEPLOY_API_DIR")/.env'; exit 1; }; touch $(remote_quote "$DEPLOY_PROJECT_DIR")/.env; chmod 600 $(remote_quote "$DEPLOY_PROJECT_DIR")/.env"
 
-ensure_remote_env API_PORT "$DEPLOY_API_PORT"
-ensure_remote_env WEB_PORT "$DEPLOY_WEB_PORT"
-ensure_remote_env API_BUILD_CONTEXT "$DEPLOY_API_DIR"
-ensure_remote_env WEB_BUILD_CONTEXT "$DEPLOY_WEB_DIR"
-ensure_remote_env API_ENV_FILE "$DEPLOY_API_DIR/.env"
-ensure_remote_env NEXT_PUBLIC_API_URL "$DEPLOY_PUBLIC_ORIGIN$DEPLOY_BASE_PATH"
-ensure_remote_env FRONTEND_URL "$DEPLOY_PUBLIC_ORIGIN"
-ensure_remote_env NEXT_PUBLIC_AUTH_CALLBACK_PATH "$DEPLOY_BASE_PATH/auth/callback"
-ensure_remote_env NEXT_PUBLIC_BASE_PATH "$DEPLOY_BASE_PATH"
-ensure_remote_env RESEARCH_STORAGE_BACKEND json
+echo "Updating deployment environment..."
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "\
+  cd $(remote_quote "$DEPLOY_PROJECT_DIR") && \
+  ensure_env() { \
+    key=\"\$1\"; \
+    value=\"\$2\"; \
+    if grep -q \"^\${key}=\" .env; then \
+      sed -i \"s#^\${key}=.*#\${key}=\${value}#\" .env; \
+    else \
+      printf '%s=%s\n' \"\$key\" \"\$value\" >> .env; \
+    fi; \
+  }; \
+  ensure_env API_PORT $(remote_quote "$DEPLOY_API_PORT"); \
+  ensure_env WEB_PORT $(remote_quote "$DEPLOY_WEB_PORT"); \
+  ensure_env API_BUILD_CONTEXT $(remote_quote "$DEPLOY_API_DIR"); \
+  ensure_env WEB_BUILD_CONTEXT $(remote_quote "$DEPLOY_WEB_DIR"); \
+  ensure_env API_ENV_FILE $(remote_quote "$DEPLOY_API_DIR/.env"); \
+  ensure_env NEXT_PUBLIC_API_URL $(remote_quote "$DEPLOY_PUBLIC_ORIGIN$DEPLOY_BASE_PATH"); \
+  ensure_env FRONTEND_URL $(remote_quote "$DEPLOY_PUBLIC_ORIGIN"); \
+  ensure_env NEXT_PUBLIC_AUTH_CALLBACK_PATH $(remote_quote "$DEPLOY_BASE_PATH/auth/callback"); \
+  ensure_env NEXT_PUBLIC_BASE_PATH $(remote_quote "$DEPLOY_BASE_PATH"); \
+  ensure_env RESEARCH_STORAGE_BACKEND json"
 
 echo "Building and starting containers..."
 ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
-  "cd $(remote_quote "$DEPLOY_PROJECT_DIR") && sudo docker-compose config >/tmp/deep-research-compose.config && sudo docker-compose build api web && sudo docker-compose up -d api web && sudo docker-compose ps"
+  "cd $(remote_quote "$DEPLOY_PROJECT_DIR") && sudo docker-compose config >/tmp/deep-research-compose.config && sudo docker-compose build api web && sudo docker-compose up -d api && sudo docker-compose rm -sf web && sudo docker-compose up -d web && sudo docker-compose ps"
 
 echo "Verifying deployment..."
 ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
