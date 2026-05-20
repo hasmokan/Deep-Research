@@ -1,9 +1,9 @@
 services:
   api:
     build:
-      context: ./api
+      context: ${API_BUILD_CONTEXT:-./api}
     env_file:
-      - ./api/.env
+      - ${API_ENV_FILE:-./api/.env}
     environment:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       RESEARCH_STORAGE_BACKEND: ${RESEARCH_STORAGE_BACKEND:-json}
@@ -15,12 +15,13 @@ services:
 
   web:
     build:
-      context: ./web
+      context: ${WEB_BUILD_CONTEXT:-./web}
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
         NEXT_PUBLIC_AUTH_CALLBACK_PATH: ${NEXT_PUBLIC_AUTH_CALLBACK_PATH:-/auth/callback}
+        NEXT_PUBLIC_BASE_PATH: ${NEXT_PUBLIC_BASE_PATH:-}
     environment:
       NODE_ENV: production
       PORT: 3000
