@@ -1,0 +1,38 @@
+services:
+  api:
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ${API_BUILD_CONTEXT:-./api}:/app
+      - api-data:/app/data
+    environment:
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      RESEARCH_STORAGE_BACKEND: ${RESEARCH_STORAGE_BACKEND:-json}
+      WATCHFILES_FORCE_POLLING: ${WATCHFILES_FORCE_POLLING:-true}
+
+  web:
+    build:
+      target: base
+    command: sh -c "pnpm install --frozen-lockfile && pnpm dev"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      NEXT_TELEMETRY_DISABLED: 1
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
+      NEXT_PUBLIC_AUTH_CALLBACK_PATH: ${NEXT_PUBLIC_AUTH_CALLBACK_PATH:-/auth/callback}
+      NEXT_PUBLIC_BASE_PATH: ${NEXT_PUBLIC_BASE_PATH:-}
+      WATCHPACK_POLLING: ${WATCHPACK_POLLING:-true}
+      CHOKIDAR_USEPOLLING: ${CHOKIDAR_USEPOLLING:-true}
+    volumes:
+      - ${WEB_BUILD_CONTEXT:-./web}:/app
+      - web-node-modules:/app/node_modules
+      - web-next-cache:/app/.next
+      - web-pnpm-store:/pnpm
+    restart: "no"
+
+volumes:
+  web-node-modules:
+  web-next-cache:
+  web-pnpm-store:

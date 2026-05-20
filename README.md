@@ -215,12 +215,24 @@ curl -X POST http://localhost:8000/api/research/documents \
 
 ## Docker Compose
 
-本地 Docker 部署：
+项目保留两种 Docker 模式：
+
+- 生产模式：使用 `docker-compose.yml`，构建 Next standalone 和 FastAPI runtime，和线上部署一致。
+- 热更新模式：叠加 `docker-compose.dev.yml`，仍使用同一套服务、端口、`.env` 和 Dockerfile，只把命令切换成 `pnpm dev` 与 `uvicorn --reload`。
+
+### 本地热更新模式
+
+首次启动：
 
 ```bash
 cp .env.deploy.example .env
-docker-compose up --build -d
-docker-compose ps
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+后续启动：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 ```
 
 本地默认端口：
@@ -229,6 +241,52 @@ docker-compose ps
 Web: http://localhost:3000
 API: http://localhost:8000
 ```
+
+热更新模式会挂载：
+
+```text
+./web -> /app
+./api -> /app
+```
+
+前端依赖和 `.next` 缓存在 Docker volume 中，不会写进宿主机项目目录：
+
+```text
+web-node-modules
+web-next-cache
+web-pnpm-store
+```
+
+停止热更新环境：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+```
+
+如果要清掉前端依赖缓存：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v
+```
+
+### 本地生产模式
+
+本地生产模式用于验证“构建后”的效果，不提供热更新：
+
+```bash
+cp .env.deploy.example .env
+docker compose up --build -d
+docker compose ps
+```
+
+修改代码后需要重新构建：
+
+```bash
+docker compose build web api
+docker compose up -d
+```
+
+### 生产服务器
 
 生产服务器当前布局：
 

@@ -7,11 +7,17 @@
 import { CheckCircle2, Download, ExternalLink, FileText, Maximize2 } from 'lucide-react';
 import type { Document, ResearchResult } from '@/lib/api/types';
 import { Button } from '@/components/ui/button';
+import { useResizablePanel } from '@/lib/research/resizable-panels';
 import { MarkdownContent } from './markdown-content';
 
 interface ReportSidebarProps {
   result: ResearchResult;
 }
+
+const REPORT_SIDEBAR_WIDTH = {
+  defaultWidth: 760,
+  constraints: { min: 420, max: 960 },
+};
 
 function getDocumentTitle(document: Document, index: number) {
   const title = document.metadata.title;
@@ -33,9 +39,38 @@ function getDocumentUrl(document: Document) {
 
 export function ReportSidebar({ result }: ReportSidebarProps) {
   const hasDocuments = result.documents && result.documents.length > 0;
+  const sidebarWidth = useResizablePanel({
+    defaultWidth: REPORT_SIDEBAR_WIDTH.defaultWidth,
+    constraints: REPORT_SIDEBAR_WIDTH.constraints,
+    edge: 'left',
+  });
 
   return (
-    <aside className="hidden h-dvh w-[min(48vw,760px)] min-w-[560px] shrink-0 border-l border-border bg-muted/35 xl:flex xl:flex-col">
+    <aside
+      className="relative hidden h-dvh shrink-0 border-l border-border bg-muted/35 xl:flex xl:flex-col"
+      style={{ width: sidebarWidth.width }}
+    >
+      <div
+        role="separator"
+        aria-label="Resize report panel"
+        aria-orientation="vertical"
+        aria-valuemin={REPORT_SIDEBAR_WIDTH.constraints.min}
+        aria-valuemax={REPORT_SIDEBAR_WIDTH.constraints.max}
+        aria-valuenow={sidebarWidth.width}
+        tabIndex={0}
+        className="absolute -left-1 top-0 z-50 hidden h-full w-2 cursor-col-resize touch-none outline-none transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/15 xl:block"
+        onMouseDown={sidebarWidth.startResize}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            sidebarWidth.resizeBy(16);
+          }
+          if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            sidebarWidth.resizeBy(-16);
+          }
+        }}
+      />
       <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-card/95 px-5 backdrop-blur-xl">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-foreground">
