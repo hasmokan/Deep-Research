@@ -349,6 +349,7 @@ DEPLOY_SSH_KEY=<部署私钥>
 更多细节见：
 
 ```text
+docs/deployment/docker-local.md
 docs/deployment/github-actions.md
 docs/deployment/docker.md
 ```
