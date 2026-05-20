@@ -866,7 +866,7 @@ export default function Home() {
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-4 pb-40 pt-8 md:px-8">
+          <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-4 pb-64 pt-8 md:px-8">
             {!hasConversation && (
               <div className="flex flex-1 items-center justify-center">
                 <div className="max-w-2xl text-center">
@@ -934,7 +934,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 px-4 pb-4 pt-10">
+        <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-background via-background/95 to-transparent px-4 pb-4 pt-16">
           <SearchForm
             query={localQuery}
             isLoading={isLoading}

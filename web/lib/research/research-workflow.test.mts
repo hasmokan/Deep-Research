@@ -191,6 +191,42 @@ test('buildResearchActivity summarizes report draft trace events instead of expo
   assert.doesNotMatch(activity[0].detail, /完整正文/);
 });
 
+test('buildResearchActivity summarizes analysis draft trace events instead of exposing markdown bodies', () => {
+  const analysisDraft = [
+    '# hasmokan 身份分析',
+    '',
+    '## 基本信息',
+    '',
+    '| 项目 | 内容 |',
+    '|------|------|',
+    '| **身份** | GitHub 开发者/用户名 |',
+    '',
+    '## 主要项目与技术栈',
+    '',
+    '这类草稿正文不应该塞进主对话流。',
+  ].join('\n');
+
+  const activity = buildResearchActivity(
+    [],
+    [],
+    [],
+    [
+      {
+        id: 'analysis-draft',
+        stage: 'analyze',
+        kind: 'reasoning',
+        title: 'Analysis draft',
+        detail: analysisDraft,
+      },
+    ],
+  );
+
+  assert.equal(activity[0].title, 'Analysis draft');
+  assert.match(activity[0].detail, /Draft content is kept out of the chat timeline/);
+  assert.doesNotMatch(activity[0].detail, /基本信息/);
+  assert.doesNotMatch(activity[0].detail, /GitHub 开发者/);
+});
+
 test('buildResearchActivity preserves streamed thinking ids for animated updates', () => {
   const activity = buildResearchActivity(
     [],

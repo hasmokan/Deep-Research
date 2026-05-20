@@ -55,6 +55,7 @@ const DEFAULT_VISIBLE_AGENT_EVENTS = 2;
 export const PLAN_FIRST_STEP_REVEAL_DELAY_MS = 120;
 export const PLAN_STEP_REVEAL_INTERVAL_MS = 520;
 const REPORT_ARTIFACT_DETAIL = 'Full report opened in the artifact panel. The chat timeline keeps the research steps, sources, status, and model thinking process.';
+const DRAFT_CONTENT_DETAIL = 'Draft content is kept out of the chat timeline. The timeline keeps the research steps, sources, status, and model thinking process.';
 
 export function getResearchQueryOverride(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -155,32 +156,40 @@ export function getResearchSubmitAction({
   return 'none';
 }
 
-function isReportArtifactDraft(stage: string, title: string, detail: string) {
+function isLargeMarkdownDraft(title: string, detail: string) {
   const label = title.toLowerCase();
   const text = detail.trim();
 
   return (
-    stage === 'report' &&
-    (label.includes('draft') || label.includes('report')) &&
+    (label.includes('draft') || label.includes('report') || label.includes('analysis')) &&
     (
       text.startsWith('#') ||
       text.includes('\n## ') ||
+      text.includes('\n|') ||
       text.length > 1200
     )
   );
 }
 
 function getThinkingDetail(message: ResearchStreamThinking) {
-  if (isReportArtifactDraft(message.stage, message.label, message.text)) {
+  if (message.stage === 'report' && isLargeMarkdownDraft(message.label, message.text)) {
     return REPORT_ARTIFACT_DETAIL;
+  }
+
+  if (message.stage === 'analyze' && isLargeMarkdownDraft(message.label, message.text)) {
+    return DRAFT_CONTENT_DETAIL;
   }
 
   return message.text;
 }
 
 function getTraceDetail(event: ResearchStreamTrace) {
-  if (isReportArtifactDraft(event.stage, event.title, event.detail)) {
+  if (event.stage === 'report' && isLargeMarkdownDraft(event.title, event.detail)) {
     return REPORT_ARTIFACT_DETAIL;
+  }
+
+  if (event.stage === 'analyze' && isLargeMarkdownDraft(event.title, event.detail)) {
+    return DRAFT_CONTENT_DETAIL;
   }
 
   return event.detail;
