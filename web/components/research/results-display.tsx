@@ -1,12 +1,12 @@
 'use client';
 
 /**
- * ChatGPT-style research answer rendered inline in the conversation.
+ * Compact research completion summary rendered inline in the conversation.
+ * The full report body belongs in the artifact panel, not the chat timeline.
  */
 
 import { BrainCircuit, CheckCircle2, ExternalLink, FileText } from 'lucide-react';
 import type { Document, ResearchResult } from '@/lib/api/types';
-import { MarkdownContent } from './markdown-content';
 
 interface ResultsDisplayProps {
   result: ResearchResult;
@@ -50,23 +50,17 @@ export function ResultsDisplay({ result }: ResultsDisplayProps) {
           </div>
 
           {result.report ? (
-            <MarkdownContent content={result.report} />
+            <div className="rounded-[16px] border border-border bg-card p-4">
+              <p className="text-sm font-semibold text-foreground">Research report generated</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                The full report is available in the artifact panel. The conversation keeps only the research steps,
+                status, sources, and model thinking process.
+              </p>
+            </div>
           ) : (
             <p className="text-base leading-7 text-muted-foreground">
               No report text was returned. The analysis notes below may still contain useful findings.
             </p>
-          )}
-
-          {result.analysis && (
-            <details className="mt-6 rounded-[16px] border border-border bg-card p-4">
-              <summary className="cursor-pointer text-sm font-medium text-foreground">
-                Analysis notes
-              </summary>
-              <MarkdownContent
-                content={result.analysis}
-                className="mt-4 text-sm"
-              />
-            </details>
           )}
         </article>
       </div>

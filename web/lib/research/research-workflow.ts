@@ -54,6 +54,7 @@ export interface ResearchActivityStream {
 const DEFAULT_VISIBLE_AGENT_EVENTS = 2;
 export const PLAN_FIRST_STEP_REVEAL_DELAY_MS = 120;
 export const PLAN_STEP_REVEAL_INTERVAL_MS = 520;
+const REPORT_ARTIFACT_DETAIL = 'Full report opened in the artifact panel. The chat timeline keeps the research steps, sources, status, and model thinking process.';
 
 export function getResearchQueryOverride(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -154,6 +155,37 @@ export function getResearchSubmitAction({
   return 'none';
 }
 
+function isReportArtifactDraft(stage: string, title: string, detail: string) {
+  const label = title.toLowerCase();
+  const text = detail.trim();
+
+  return (
+    stage === 'report' &&
+    (label.includes('draft') || label.includes('report')) &&
+    (
+      text.startsWith('#') ||
+      text.includes('\n## ') ||
+      text.length > 1200
+    )
+  );
+}
+
+function getThinkingDetail(message: ResearchStreamThinking) {
+  if (isReportArtifactDraft(message.stage, message.label, message.text)) {
+    return REPORT_ARTIFACT_DETAIL;
+  }
+
+  return message.text;
+}
+
+function getTraceDetail(event: ResearchStreamTrace) {
+  if (isReportArtifactDraft(event.stage, event.title, event.detail)) {
+    return REPORT_ARTIFACT_DETAIL;
+  }
+
+  return event.detail;
+}
+
 export function buildResearchActivity(
   statuses: ResearchStreamStatus[],
   thinking: ResearchStreamThinking[],
@@ -166,7 +198,7 @@ export function buildResearchActivity(
       stage: event.stage,
       kind: event.kind,
       title: event.title,
-      detail: event.detail,
+      detail: getTraceDetail(event),
       documents: event.documents,
     }));
 
@@ -176,7 +208,7 @@ export function buildResearchActivity(
         stage: message.stage,
         kind: 'thinking',
         title: message.label,
-        detail: message.text,
+        detail: getThinkingDetail(message),
       };
       const stageIndex = events.findLastIndex((event) => event.stage === message.stage);
 
@@ -232,7 +264,7 @@ export function buildResearchActivity(
       stage: message.stage,
       kind: 'thinking' as const,
       title: message.label,
-      detail: message.text,
+      detail: getThinkingDetail(message),
     });
   });
 

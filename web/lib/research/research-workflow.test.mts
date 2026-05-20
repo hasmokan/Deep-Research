@@ -140,6 +140,57 @@ test('buildResearchActivity keeps backend trace and model thinking events', () =
   assert.match(activity[2].detail, /compare source reliability/);
 });
 
+test('buildResearchActivity summarizes report draft thinking instead of exposing the full report body', () => {
+  const reportDraft = [
+    '# 研究报告：夏日弥身份分析',
+    '',
+    '## Executive Summary',
+    '',
+    '这是一段很长的报告正文，不应该塞进主对话流。',
+  ].join('\n');
+
+  const activity = buildResearchActivity(
+    [],
+    [
+      {
+        id: 'report-draft',
+        stage: 'report',
+        label: 'Report draft',
+        text: reportDraft,
+      },
+    ],
+  );
+
+  assert.equal(activity[0].kind, 'thinking');
+  assert.equal(activity[0].title, 'Report draft');
+  assert.match(activity[0].detail, /Full report opened in the artifact panel/);
+  assert.doesNotMatch(activity[0].detail, /Executive Summary/);
+  assert.doesNotMatch(activity[0].detail, /这是一段很长的报告正文/);
+});
+
+test('buildResearchActivity summarizes report draft trace events instead of exposing the full report body', () => {
+  const reportDraft = '# 研究报告\n\n## Executive Summary\n\n完整正文不应该进入对话区。';
+  const activity = buildResearchActivity(
+    [],
+    [],
+    [],
+    [
+      {
+        id: 'draft-report',
+        stage: 'report',
+        kind: 'reasoning',
+        title: 'Report draft',
+        detail: reportDraft,
+      },
+    ],
+  );
+
+  assert.equal(activity[0].title, 'Report draft');
+  assert.match(activity[0].detail, /Full report opened in the artifact panel/);
+  assert.doesNotMatch(activity[0].detail, /Executive Summary/);
+  assert.doesNotMatch(activity[0].detail, /完整正文/);
+});
+
 test('buildResearchActivity preserves streamed thinking ids for animated updates', () => {
   const activity = buildResearchActivity(
     [],
