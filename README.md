@@ -1,316 +1,345 @@
 # Deep Research
 
-AI-powered deep research tool with intelligent search, document analysis, and automated report generation.
+Deep Research 是一个面向研究型问答的全栈应用：前端使用 Next.js，后端使用 FastAPI，研究流程由 LangGraph / LangChain 编排，支持 OpenAI 兼容模型、Supabase 存储和可选 Langfuse 观测。
 
-## Features
+生产环境当前部署在：
 
-- 🔍 **Semantic Search**: Vector-based similarity search using OpenAI embeddings
-- 🤖 **AI Analysis**: Intelligent document analysis powered by LangGraph
-- 📊 **Report Generation**: Automated research report creation using GPT-4
-- 💾 **Vector Database**: Efficient storage and retrieval with Supabase pgvector
-- 🎨 **Modern UI**: Beautiful interface built with Next.js and shadcn/ui
-
-## Tech Stack
-
-### Frontend
-- **Next.js 16+** (App Router)
-- **TypeScript** (Strict mode)
-- **Tailwind CSS** (v4)
-- **shadcn/ui** (Radix UI components)
-- **Zustand** (State management)
-
-### Backend
-- **Python 3.11+**
-- **FastAPI** (Web framework)
-- **LangGraph** (AI agent orchestration)
-- **LangChain** (LLM framework)
-- **OpenAI API** (Embeddings & LLM)
-
-### Database
-- **Supabase** (PostgreSQL + pgvector)
-
-## Project Structure
-
+```text
+https://eyjamini.com/ds
 ```
+
+健康检查：
+
+```text
+https://eyjamini.com/ds/health
+```
+
+## 功能
+
+- 研究问题输入、执行和结果展示
+- LangGraph 驱动的搜索、分析、报告生成流程
+- 支持本地 JSON 存储或 Supabase 持久化
+- 支持 Google 登录和用户隔离
+- 支持 Langfuse trace，用于观察研究流程质量
+- Docker Compose 部署
+- GitHub Actions 自动部署到服务器
+
+## 技术栈
+
+前端：
+
+- Next.js 16 App Router
+- React 19
+- TypeScript
+- Tailwind CSS
+- Radix UI / shadcn 风格组件
+- Zustand
+- Supabase JS
+
+后端：
+
+- Python 3.11+
+- FastAPI
+- Uvicorn
+- LangGraph
+- LangChain
+- OpenAI / OpenAI-compatible API
+- Supabase Python SDK
+
+部署：
+
+- Docker / Docker Compose
+- Nginx 反向代理
+- GitHub Actions
+
+## 目录结构
+
+```text
 deep-research/
-├── web/                    # Next.js frontend
-│   ├── app/               # App Router pages
-│   ├── components/        # React components
-│   │   ├── ui/           # shadcn/ui base components
-│   │   └── research/     # Research feature components
-│   └── lib/              # Utilities and API client
-│       ├── api/          # Backend API client
-│       └── store/        # Zustand state management
-├── api/                    # Python backend
-│   ├── main.py            # FastAPI application entry
-│   ├── agents/            # LangGraph agents
-│   │   ├── research_agent.py
-│   │   └── nodes/        # Agent nodes
-│   ├── services/          # Business logic
-│   │   └── vector_store.py
-│   ├── routers/           # FastAPI routes
-│   ├── models/            # Pydantic models
-│   ├── core/              # Configuration
-│   └── database/          # SQL schemas
-└── CLAUDE.md              # Project guidelines
+├── api/                      # FastAPI 后端
+│   ├── main.py               # 应用入口
+│   ├── agents/               # LangGraph agent
+│   ├── core/                 # 配置
+│   ├── database/             # Supabase SQL schema
+│   ├── models/               # Pydantic model
+│   ├── routers/              # API routes
+│   ├── services/             # 业务服务
+│   └── tests/                # 后端测试
+├── web/                      # Next.js 前端
+│   ├── app/                  # App Router pages
+│   ├── components/           # UI 和业务组件
+│   └── lib/                  # API client、auth、状态和研究逻辑
+├── docs/
+│   └── deployment/           # 部署文档
+├── scripts/
+│   └── deploy-production.sh  # 生产部署脚本
+├── docker-compose.yml
+└── .github/workflows/deploy.yml
 ```
 
-## Prerequisites
+## 本地开发
 
-- **Node.js** 18+ (with pnpm)
-- **Python** 3.11+
-- **Supabase** account
-- **OpenAI** API key
+### 依赖
 
-## Setup Instructions
+- Node.js 18+
+- pnpm 10+
+- Python 3.11+
+- Docker，可选
+- Supabase 项目，可选，使用 `RESEARCH_STORAGE_BACKEND=supabase` 时需要
+- OpenAI 或兼容接口 key
 
-### 1. Clone Repository
-
-```bash
-git clone <repository-url>
-cd deep-research
-```
-
-### 2. Database Setup
-
-1. Create a Supabase project at [https://supabase.com](https://supabase.com)
-2. Go to SQL Editor in your Supabase dashboard
-3. Execute the schema in `api/database/schema.sql`
-4. Enable pgvector extension in Database > Extensions
-
-For detailed instructions, see [api/database/README.md](api/database/README.md)
-
-### 3. Backend Setup
+### 后端
 
 ```bash
 cd api
-
-# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+source venv/bin/activate
 pip install -r requirements.txt
-
-# Configure environment
 cp .env.example .env
-# Edit .env and add your credentials:
-# - SUPABASE_URL
-# - SUPABASE_KEY
-# - SUPABASE_SERVICE_KEY (required when RESEARCH_STORAGE_BACKEND=supabase)
-# - OPENAI_API_KEY
-# - OPENAI_BASE_URL (if using an OpenAI-compatible provider)
-# - LLM_MODEL=minimax/minimax-m2.7
-# - EMBEDDING_MODEL=openai/text-embedding-3-small
-# - RESEARCH_STORAGE_BACKEND=json or supabase
-# - LANGFUSE_ENABLED=true (optional, for trace/eval observability)
-# - LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL
 ```
 
-Google login is required for the deployed app. Enable Google in Supabase
-Authentication > Providers, set the Supabase callback URL in Google Cloud, and
-add `/auth/callback` for localhost and your Vercel domain in Supabase redirect
-URLs. See [api/database/README.md](api/database/README.md) for the exact setup.
+编辑 `api/.env`，至少配置：
 
-Optional Langfuse tracing records each research run as an agent trace with
-intent routing, web search candidates, analysis generation, report generation,
-and completion/error metadata. This is useful for evaluating bad retrievals and
-comparing search changes.
-
-### 4. Frontend Setup
-
-```bash
-cd web
-
-# Install dependencies
-pnpm install
-
-# Configure environment
-cp .env.example .env.local
-# Edit NEXT_PUBLIC_API_URL, NEXT_PUBLIC_SUPABASE_URL, and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+```env
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
+FRONTEND_URL=http://localhost:3000
+RESEARCH_STORAGE_BACKEND=json
 ```
 
-## Running the Application
+如果使用 Supabase 存储，还需要：
 
-### Start Backend
+```env
+SUPABASE_URL=
+SUPABASE_KEY=
+SUPABASE_SERVICE_KEY=
+RESEARCH_STORAGE_BACKEND=supabase
+```
+
+启动后端：
 
 ```bash
 cd api
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 uvicorn main:app --reload --port 8000
 ```
 
-The API will be available at: http://localhost:8000
+访问：
 
-API Documentation: http://localhost:8000/docs
+```text
+http://localhost:8000/health
+http://localhost:8000/docs
+```
 
-### Start Frontend
+### 前端
+
+```bash
+cd web
+pnpm install
+cp .env.example .env.local
+```
+
+编辑 `web/.env.local`：
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+NEXT_PUBLIC_AUTH_CALLBACK_PATH=/auth/callback
+```
+
+启动前端：
 
 ```bash
 cd web
 pnpm dev
 ```
 
-The web app will be available at: http://localhost:3000
+访问：
 
-## Usage
+```text
+http://localhost:3000
+```
 
-### Adding Documents
+## 数据库和登录
 
-Before running research queries, you need to add documents to the vector database:
+Supabase schema 在：
+
+```text
+api/database/schema.sql
+```
+
+初始化步骤：
+
+1. 创建 Supabase 项目。
+2. 在 SQL Editor 执行 `api/database/schema.sql`。
+3. 启用 `pgvector` 扩展。
+4. 如果要启用 Google 登录，在 Supabase Authentication Providers 中开启 Google。
+5. Google OAuth 回调 URL 使用 Supabase 提供的 `/auth/v1/callback`。
+6. Supabase redirect URL 至少加入：
+
+```text
+http://localhost:3000/auth/callback
+https://eyjamini.com/ds/auth/callback
+```
+
+详细说明见：
+
+```text
+api/database/README.md
+```
+
+## API
+
+常用接口：
+
+```text
+GET  /health
+POST /api/research/
+POST /api/research/execute
+GET  /api/research/documents
+POST /api/research/documents
+DELETE /api/research/documents/{id}
+```
+
+添加文档示例：
 
 ```bash
-# Using the API directly
 curl -X POST http://localhost:8000/api/research/documents \
   -H "Content-Type: application/json" \
   -d '{
-    "content": "Your document content here",
-    "metadata": {"source": "example", "date": "2024-01-10"}
+    "content": "文档正文",
+    "metadata": {"source": "example"}
   }'
 ```
 
-Or create a script to bulk import documents.
+## Docker Compose
 
-### Running Research
-
-1. Open http://localhost:3000
-2. Enter your research query in the search box
-3. Click "Search" to start the research process
-4. Wait for the AI agent to:
-   - Search relevant documents
-   - Analyze the content
-   - Generate a comprehensive report
-
-## API Endpoints
-
-### Research
-
-- `POST /api/research/` - Create research query (returns basic info)
-- `POST /api/research/execute` - Execute research and get full results
-- `GET /api/research/documents` - List all documents
-- `POST /api/research/documents` - Add a new document
-- `DELETE /api/research/documents/{id}` - Delete a document
-
-### Health Check
-
-- `GET /health` - API health check
-
-## LangGraph Agent Flow
-
-The research agent follows this workflow:
-
-```
-┌─────────┐
-│ Search  │ - Vector similarity search in Supabase
-└────┬────┘
-     │
-     ▼
-┌─────────┐
-│ Analyze │ - Extract insights using GPT-4o-mini
-└────┬────┘
-     │
-     ▼
-┌──────────┐
-│ Generate │ - Create comprehensive report with GPT-4o
-└──────────┘
-```
-
-Each node is conditionally executed based on the state:
-- If no documents found → Skip analysis
-- If analysis fails → Skip report generation
-
-## Development
-
-### Type Checking
+本地 Docker 部署：
 
 ```bash
-# Frontend
-cd web && pnpm type-check
-
-# Backend
-cd api && mypy api/
+cp .env.deploy.example .env
+docker-compose up --build -d
+docker-compose ps
 ```
 
-### Linting
+本地默认端口：
+
+```text
+Web: http://localhost:3000
+API: http://localhost:8000
+```
+
+生产服务器当前布局：
+
+```text
+/ds   前端源码、docker-compose.yml、部署 .env
+/api  后端源码、api/.env
+```
+
+生产环境关键变量：
+
+```env
+API_PORT=8000
+WEB_PORT=3002
+API_BUILD_CONTEXT=/api
+WEB_BUILD_CONTEXT=/ds
+API_ENV_FILE=/api/.env
+NEXT_PUBLIC_API_URL=https://eyjamini.com/ds
+FRONTEND_URL=https://eyjamini.com
+NEXT_PUBLIC_AUTH_CALLBACK_PATH=/ds/auth/callback
+NEXT_PUBLIC_BASE_PATH=/ds
+```
+
+## 自动部署
+
+GitHub Actions workflow：
+
+```text
+.github/workflows/deploy.yml
+```
+
+触发方式：
+
+- push 到 `main`
+- GitHub Actions 页面手动 `workflow_dispatch`
+
+部署脚本：
+
+```text
+scripts/deploy-production.sh
+```
+
+GitHub Secrets 需要配置在 `Production` environment 下：
+
+```text
+DEPLOY_HOST=159.195.30.218
+DEPLOY_USER=cxk
+DEPLOY_PORT=22
+DEPLOY_SSH_KEY=<部署私钥>
+```
+
+部署脚本会：
+
+1. 同步 `web/` 到服务器 `/ds`。
+2. 同步 `api/` 到服务器 `/api`。
+3. 保留服务器上的 `/ds/.env` 和 `/api/.env`。
+4. 执行 `docker-compose build api web`。
+5. 执行 `docker-compose up -d api web`。
+6. 检查 `https://eyjamini.com/ds` 和 `https://eyjamini.com/ds/health`。
+
+更多细节见：
+
+```text
+docs/deployment/github-actions.md
+docs/deployment/docker.md
+```
+
+## 常用命令
+
+查看生产容器：
 
 ```bash
-# Frontend
-cd web && pnpm lint
-
-# Backend
-cd api && ruff check api/
+ssh summi-netcup
+cd /ds
+sudo docker-compose ps
 ```
 
-### Code Formatting
+查看日志：
 
 ```bash
-# Frontend
-cd web && pnpm format
-
-# Backend
-cd api && ruff format api/
+cd /ds
+sudo docker-compose logs -f --tail=100 api web
 ```
 
-## Configuration
+手动重启：
 
-### Vector Search Parameters
-
-Edit `api/services/vector_store.py`:
-
-```python
-# Adjust similarity threshold (0-1)
-threshold = 0.7  # Higher = stricter matching
-
-# Adjust result limit
-limit = 10  # Maximum documents to retrieve
-```
-
-### LLM Models
-
-Edit `api/agents/nodes/`:
-
-- **analyze.py**: Uses `gpt-4o-mini` (fast, cost-effective)
-- **generate.py**: Uses `gpt-4o` (high quality reports)
-
-Change models in the respective files if needed.
-
-## Troubleshooting
-
-### Backend Issues
-
-**Error: "Module not found"**
 ```bash
-# Ensure you're in the api directory and venv is activated
-cd api
-source venv/bin/activate
-pip install -r requirements.txt
+cd /ds
+sudo docker-compose restart
 ```
 
-**Error: "Supabase connection failed"**
-- Check `.env` file has correct `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
-- Verify Supabase project is active
+本地运行前端 lint：
 
-**Error: "OpenAI API key invalid"**
-- Check `.env` file has valid `OPENAI_API_KEY`
-- Ensure you have sufficient credits
-
-### Frontend Issues
-
-**Error: "Cannot connect to backend"**
-- Ensure backend is running on port 8000
-- Check `NEXT_PUBLIC_API_URL` in `.env.local`
-
-**Error: "Module not found"**
 ```bash
 cd web
-rm -rf node_modules pnpm-lock.yaml
-pnpm install
+pnpm lint
 ```
+
+运行前端 Node 测试示例：
+
+```bash
+node --test web/lib/auth/callback-redirect.test.mts
+```
+
+## 注意事项
+
+- 不要提交 `.env`、私钥、OpenAI key、Supabase service key。
+- `NEXT_PUBLIC_*` 会进入浏览器 bundle，只能放公开值。
+- 生产前端挂在 `/ds` 下，Next.js 通过 `NEXT_PUBLIC_BASE_PATH=/ds` 构建。
+- 前端 OAuth 回调路径是 `/ds/auth/callback`。
+- 如果修改 `NEXT_PUBLIC_*`，需要重新 build 前端镜像。
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome! Please read the development guidelines in [CLAUDE.md](CLAUDE.md) before submitting PRs.
