@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from deerflow.sandbox.sandbox import Sandbox
+from runtime_sandbox.sandbox.sandbox import Sandbox
 
 
 class SandboxProvider(ABC):

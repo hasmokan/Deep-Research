@@ -163,8 +163,8 @@ test('buildResearchActivity summarizes report draft thinking instead of exposing
 
   assert.equal(activity[0].kind, 'thinking');
   assert.equal(activity[0].title, 'Report draft');
-  assert.match(activity[0].detail, /Full report opened in the artifact panel/);
-  assert.doesNotMatch(activity[0].detail, /Executive Summary/);
+  assert.match(activity[0].detail, /Structuring section: Executive Summary/);
+  assert.match(activity[0].detail, /Full report opens in the artifact panel/);
   assert.doesNotMatch(activity[0].detail, /这是一段很长的报告正文/);
 });
 
@@ -186,8 +186,8 @@ test('buildResearchActivity summarizes report draft trace events instead of expo
   );
 
   assert.equal(activity[0].title, 'Report draft');
-  assert.match(activity[0].detail, /Full report opened in the artifact panel/);
-  assert.doesNotMatch(activity[0].detail, /Executive Summary/);
+  assert.match(activity[0].detail, /Structuring section: Executive Summary/);
+  assert.match(activity[0].detail, /Full report opens in the artifact panel/);
   assert.doesNotMatch(activity[0].detail, /完整正文/);
 });
 
@@ -222,8 +222,8 @@ test('buildResearchActivity summarizes analysis draft trace events instead of ex
   );
 
   assert.equal(activity[0].title, 'Analysis draft');
-  assert.match(activity[0].detail, /Draft content is kept out of the chat timeline/);
-  assert.doesNotMatch(activity[0].detail, /基本信息/);
+  assert.match(activity[0].detail, /Structuring section: 基本信息/);
+  assert.match(activity[0].detail, /Structuring section: 主要项目与技术栈/);
   assert.doesNotMatch(activity[0].detail, /GitHub 开发者/);
 });
 

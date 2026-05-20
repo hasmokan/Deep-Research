@@ -139,6 +139,13 @@ function shouldShowThinkingBlock(event: ResearchActivityEvent) {
   return event.kind === 'thinking' && event.detail.trim().length > 0;
 }
 
+function splitThinkingNotes(detail: string) {
+  return detail
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^•\s*/, ''))
+    .filter(Boolean);
+}
+
 interface ActivityEventRowProps {
   event: ResearchActivityEvent;
   status: LoadingStatus;
@@ -150,21 +157,22 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
   const shouldAnimateText = isStreaming && status === 'active' && event.detail.length > 0;
   const detail = useTypewriterText(event.detail, shouldAnimateText);
   const showCursor = shouldAnimateText && detail.length < event.detail.length;
+  const thinkingNotes = shouldShowThinkingBlock(event) ? splitThinkingNotes(detail) : [];
 
   return (
     <div
       className={`
-        relative -mx-1 flex gap-3 rounded-[8px] px-1 py-2.5
+        relative -mx-1 flex gap-2.5 rounded-[8px] px-1 py-2
         ${shouldAnimateText ? 'agent-active-row' : ''}
       `}
     >
-      <div className="relative flex w-6 shrink-0 justify-center">
+      <div className="relative flex w-5 shrink-0 justify-center">
         {!isLast && (
           <span className="absolute left-1/2 top-7 h-[calc(100%-0.5rem)] w-px -translate-x-1/2 bg-border/80" />
         )}
         <div
           className={`
-            relative z-10 flex h-6 w-6 items-center justify-center rounded-full border bg-background transition-smooth
+            relative z-10 flex h-5 w-5 items-center justify-center rounded-full border bg-background transition-smooth
             ${status === 'completed'
               ? 'border-foreground bg-foreground text-background'
               : status === 'active'
@@ -174,9 +182,9 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
           `}
         >
           {status === 'completed' ? (
-            <CheckCircle2 className="h-3.5 w-3.5" />
+            <CheckCircle2 className="h-3 w-3" />
           ) : status === 'active' ? (
-            <EventIcon event={event} className="h-3.5 w-3.5" />
+            <EventIcon event={event} className="h-3 w-3" />
           ) : (
             <Circle className="h-3 w-3" />
           )}
@@ -187,7 +195,7 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
         <div className="flex min-w-0 items-center gap-2">
           <p
             className={`
-              truncate text-sm font-medium
+              truncate text-xs font-medium
               ${status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}
             `}
           >
@@ -201,7 +209,7 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
         </div>
 
         {!shouldShowThinkingBlock(event) && (
-          <p className="text-sm leading-6 text-muted-foreground">
+          <p className="text-xs leading-5 text-muted-foreground">
             {detail}
             {showCursor && (
               <span className="ml-0.5 inline-block h-4 w-px translate-y-0.5 animate-agent-cursor bg-foreground/70" />
@@ -243,8 +251,13 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
         )}
 
         {shouldShowThinkingBlock(event) && (
-          <div className="mt-2 whitespace-pre-wrap border-l border-border/80 pl-3 text-sm leading-6 text-foreground">
-            {detail}
+          <div className="mt-2 space-y-1.5 border-l border-border/80 pl-3 text-xs leading-5 text-foreground">
+            {thinkingNotes.map((note, noteIndex) => (
+              <div key={`${event.id}-${noteIndex}`} className="flex gap-2">
+                <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-foreground/55" />
+                <span>{note}</span>
+              </div>
+            ))}
             {showCursor && (
               <span className="ml-0.5 inline-block h-4 w-px translate-y-0.5 animate-agent-cursor bg-foreground/70" />
             )}

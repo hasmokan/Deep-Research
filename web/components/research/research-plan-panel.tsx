@@ -38,7 +38,6 @@ interface ResearchPlanStepRowProps {
 
 const PLAN_REVEAL_TICK_MS = 50;
 const PLAN_REVEAL_SETTLE_MS = 180;
-const PLAN_SKELETON_ROWS = 4;
 
 function TypewriterCursor() {
   return (
@@ -90,28 +89,6 @@ function ResearchPlanStepRow({
           {showCursor && <TypewriterCursor />}
         </p>
       </div>
-    </div>
-  );
-}
-
-function PlanPanelSkeleton() {
-  return (
-    <div className="grid gap-4" aria-label="Preparing research plan">
-      {Array.from({ length: PLAN_SKELETON_ROWS }).map((_, index) => (
-        <div key={index} className="flex gap-3">
-          <div className="flex flex-col items-center">
-            <div className="h-5 w-5 rounded-full border border-dashed border-muted-foreground/30 bg-background" />
-            {index < PLAN_SKELETON_ROWS - 1 && (
-              <div className="my-1 h-full min-h-6 w-px bg-border" />
-            )}
-          </div>
-          <div className="min-w-0 flex-1 pb-2">
-            <div className="mt-0.5 h-4 w-44 max-w-[58%] animate-pulse rounded-full bg-muted" />
-            <div className="mt-3 h-3.5 w-full max-w-[92%] animate-pulse rounded-full bg-muted/80" />
-            <div className="mt-2 h-3.5 w-2/3 animate-pulse rounded-full bg-muted/70" />
-          </div>
-        </div>
-      ))}
     </div>
   );
 }
@@ -197,7 +174,7 @@ export function ResearchPlanPanel({
         </div>
       </div>
 
-      {visibleSteps.length > 0 ? (
+      {visibleSteps.length > 0 && (
         <div className="grid gap-4">
           {visibleSteps.map((step, index) => (
             <ResearchPlanStepRow
@@ -210,8 +187,6 @@ export function ResearchPlanPanel({
             />
           ))}
         </div>
-      ) : (
-        <PlanPanelSkeleton />
       )}
 
       {activity && (

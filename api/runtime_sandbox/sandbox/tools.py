@@ -1,7 +1,7 @@
 from typing import Any, Callable
 
-from deerflow.sandbox.sandbox import Sandbox
-from deerflow.sandbox.sandbox_provider import SandboxProvider
+from runtime_sandbox.sandbox.sandbox import Sandbox
+from runtime_sandbox.sandbox.sandbox_provider import SandboxProvider
 
 
 SandboxToolResult = dict[str, Any]

@@ -173,11 +173,18 @@ def _parse_json_payload(content: str) -> dict[str, Any]:
 
 def _normalize_plan_payload(query: str, payload: dict[str, Any]) -> dict[str, Any]:
     raw_steps = payload.get("steps")
-    if not isinstance(raw_steps, list) or not raw_steps:
-        raise ValueError("Model research plan payload must include steps")
+    if not isinstance(raw_steps, list) or len(raw_steps) != 4:
+        raise ValueError("Model research plan payload must include exactly 4 steps")
+
+    summary = str(payload.get("summary", "")).strip()
+    if not summary:
+        raise ValueError("Model research plan payload must include a summary")
+
+    if _looks_like_generic_fallback_summary(summary):
+        raise ValueError("Model research plan summary was generic; retry plan generation")
 
     steps = []
-    for index, raw_step in enumerate(raw_steps[:4], start=1):
+    for index, raw_step in enumerate(raw_steps, start=1):
         if not isinstance(raw_step, dict):
             raise ValueError("Each research plan step must be an object")
 
@@ -194,10 +201,6 @@ def _normalize_plan_payload(query: str, payload: dict[str, Any]) -> dict[str, An
                 "detail": detail,
             }
         )
-
-    summary = str(payload.get("summary", "")).strip()
-    if not summary:
-        summary = f'Research "{query}" across public web sources, compare evidence, and produce a cited report.'
 
     return {
         "query": query,
@@ -224,6 +227,15 @@ def _normalize_plan_need_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _slugify_step_id(value: str, index: int) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or f"step-{index}"
+
+
+def _looks_like_generic_fallback_summary(summary: str) -> bool:
+    normalized_summary = summary.strip().lower()
+    return (
+        "across public web sources" in normalized_summary
+        and "compare evidence" in normalized_summary
+        and "produce a cited report" in normalized_summary
+    )
 
 
 def _langchain_config(run_name: str, stage: str) -> dict[str, Any]:

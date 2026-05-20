@@ -169,6 +169,33 @@ class ResearchPlanRouteTests(TestCase):
         self.assertEqual(events[2]["data"], {**generated_plan, "should_plan": True})
         self.assertEqual(events[3]["data"], {**generated_plan, "should_plan": True})
 
+    def test_plan_stream_endpoint_emits_error_when_plan_generation_fails(self):
+        client = TestClient(app)
+
+        async def fake_generate_research_plan(query: str):
+            self.assertEqual(query, "Compare AI search products")
+            raise ValueError("Model research plan payload must include a summary")
+
+        with (
+            patch(
+                "routers.research.assess_research_plan_need",
+                return_value={"should_plan": True, "reason": "Broad research task."},
+            ),
+            patch(
+                "routers.research.generate_research_plan",
+                side_effect=fake_generate_research_plan,
+            ),
+        ):
+            response = client.post(
+                "/api/research/plan/stream",
+                json={"query": "Compare AI search products"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = _parse_sse_events(response.text)
+        self.assertEqual([event["event"] for event in events], ["status", "status", "stream_error"])
+        self.assertIn("must include a summary", events[-1]["data"]["detail"])
+
     def test_plan_endpoint_can_skip_plan_for_simple_follow_up(self):
         client = TestClient(app)
 
@@ -222,6 +249,55 @@ class ResearchPlanRouteTests(TestCase):
         self.assertEqual(response.json()["summary"], "Direct coding request.")
         assess_plan_need.assert_called_once()
         generate_plan.assert_not_called()
+
+
+class ResearchPlanNormalizationTests(TestCase):
+    def test_plan_normalization_rejects_missing_summary(self):
+        from agents.nodes.plan import _normalize_plan_payload
+
+        with self.assertRaisesRegex(ValueError, "summary"):
+            _normalize_plan_payload(
+                "谁是 hasmokan",
+                {
+                    "steps": [
+                        {"id": "scope", "title": "Scope", "detail": "Clarify the target identity."},
+                        {"id": "sources", "title": "Sources", "detail": "Collect public source candidates."},
+                        {"id": "compare", "title": "Compare", "detail": "Compare identity evidence."},
+                        {"id": "report", "title": "Report", "detail": "Write the final report."},
+                    ],
+                },
+            )
+
+    def test_plan_normalization_rejects_generic_fallback_summary(self):
+        from agents.nodes.plan import _normalize_plan_payload
+
+        with self.assertRaisesRegex(ValueError, "generic"):
+            _normalize_plan_payload(
+                "谁是 hasmokan",
+                {
+                    "summary": 'Research "谁是 hasmokan" across public web sources, compare evidence, and produce a cited report.',
+                    "steps": [
+                        {"id": "scope", "title": "Scope", "detail": "Clarify the target identity."},
+                        {"id": "sources", "title": "Sources", "detail": "Collect public source candidates."},
+                        {"id": "compare", "title": "Compare", "detail": "Compare identity evidence."},
+                        {"id": "report", "title": "Report", "detail": "Write the final report."},
+                    ],
+                },
+            )
+
+    def test_plan_normalization_requires_four_steps(self):
+        from agents.nodes.plan import _normalize_plan_payload
+
+        with self.assertRaisesRegex(ValueError, "exactly 4 steps"):
+            _normalize_plan_payload(
+                "谁是 hasmokan",
+                {
+                    "summary": "Trace hasmokan's public identity across technical sources.",
+                    "steps": [
+                        {"id": "scope", "title": "Scope", "detail": "Clarify the target identity."},
+                    ],
+                },
+            )
 
 
 class ResearchPlanGenerationTests(IsolatedAsyncioTestCase):

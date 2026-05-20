@@ -32,7 +32,6 @@ import {
   updateResearchActivityMessageStatus,
 } from '@/lib/research/conversation';
 import {
-  createResearchPlan,
   getResearchQueryOverride,
   normalizeResearchPlan,
   shouldRenderResearchPlanShell,
@@ -51,9 +50,25 @@ import { useResearchStore } from '@/lib/store/research';
 function UserBubble({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[680px] rounded-[26px] bg-foreground px-5 py-4 text-base leading-7 text-background">
+      <div className="max-w-[560px] rounded-[20px] bg-foreground px-4 py-3 text-sm leading-6 text-background">
         {content}
       </div>
+    </div>
+  );
+}
+
+function ThinkingDots() {
+  return (
+    <div className="mx-auto flex w-full max-w-[640px] items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
+      <span className="relative flex h-5 w-5 items-center justify-center rounded-full border border-foreground/20 text-foreground">
+        <Sparkles className="h-3.5 w-3.5" />
+      </span>
+      <span>Thinking</span>
+      <span className="inline-flex items-center gap-1" aria-hidden="true">
+        <span className="h-1 w-1 animate-agent-dot rounded-full bg-muted-foreground [animation-delay:0ms]" />
+        <span className="h-1 w-1 animate-agent-dot rounded-full bg-muted-foreground [animation-delay:160ms]" />
+        <span className="h-1 w-1 animate-agent-dot rounded-full bg-muted-foreground [animation-delay:320ms]" />
+      </span>
     </div>
   );
 }
@@ -76,7 +91,7 @@ function AssistantResultMessage({ message }: { message: ConversationMessage }) {
 
   if (message.researchPlan) {
     return (
-      <div className="mx-auto max-w-[820px]">
+      <div className="mx-auto max-w-[680px]">
         <ResearchPlanPanel
           plan={message.researchPlan}
           activity={message.researchActivity}
@@ -87,15 +102,15 @@ function AssistantResultMessage({ message }: { message: ConversationMessage }) {
 
   if (message.result?.result_type === 'answer') {
     return (
-      <div className="mx-auto w-full max-w-[760px]">
-        <div className="flex gap-4">
-          <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
-            <CheckCircle2 className="h-4 w-4" />
+      <div className="mx-auto w-full max-w-[640px]">
+        <div className="flex gap-3">
+          <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+            <CheckCircle2 className="h-3.5 w-3.5" />
           </div>
           <article className="min-w-0 flex-1">
             <MarkdownContent
               content={message.result.answer || message.result.report || message.content}
-              className="text-base leading-7"
+              className="text-sm leading-6"
             />
           </article>
         </div>
@@ -106,22 +121,22 @@ function AssistantResultMessage({ message }: { message: ConversationMessage }) {
   return (
     <>
       {message.researchActivity && (
-        <div className="mx-auto w-full max-w-[900px]">
+        <div className="mx-auto w-full max-w-[720px]">
           <LoadingState activity={message.researchActivity} />
         </div>
       )}
 
       {message.result && (
         <>
-          <div className="mx-auto w-full max-w-4xl xl:hidden">
+          <div className="mx-auto w-full max-w-3xl xl:hidden">
             <ResultsDisplay result={message.result} />
           </div>
 
-          <div className="mx-auto hidden w-full max-w-[720px] xl:block">
-            <div className="rounded-[18px] border border-border bg-card p-5 shadow-sm">
+          <div className="mx-auto hidden w-full max-w-[620px] xl:block">
+            <div className="rounded-[14px] border border-border bg-card p-4 shadow-sm">
               <div className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
-                  <CheckCircle2 className="h-4 w-4" />
+                <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-foreground">Research report generated</p>
@@ -147,6 +162,7 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const recoveryAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
+  const conversationScrollRef = useRef<HTMLDivElement | null>(null);
   const activeResearchRef = useRef<{ sessionId: string; messageId: string } | null>(null);
   const {
     query,
@@ -219,19 +235,57 @@ export default function Home() {
   const hasInlineRunningActivity = messages.some((message) => (
     message.researchActivity?.status === 'running' && !message.result
   ));
-  const shouldShowPlanShell = shouldRenderResearchPlanShell({
-    isPlanning,
+  const shouldShowPlanPanel = shouldRenderResearchPlanShell({
+    isPlanning: false,
     hasPlan: Boolean(activePlan),
   });
+  const streamingActivitySignature = messages
+    .map((message) => {
+      const activity = message.researchActivity;
+      if (!activity) {
+        return '';
+      }
+
+      return [
+        activity.status,
+        activity.streamStatuses.length,
+        activity.streamThinking.map((thinking) => `${thinking.id ?? ''}:${thinking.text.length}`).join(','),
+        activity.streamDocuments.length,
+        activity.streamTrace.length,
+      ].join(':');
+    })
+    .join('|');
 
   useEffect(() => {
-    if (hasConversation) {
-      conversationEndRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'end',
-      });
+    if (!hasConversation) {
+      return;
     }
-  }, [hasConversation, messages, researchPlan, isPlanning, isLoading, error, result]);
+
+    window.requestAnimationFrame(() => {
+      const scrollContainer = conversationScrollRef.current;
+      if (!scrollContainer) {
+        conversationEndRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'end',
+        });
+        return;
+      }
+
+      scrollContainer.scrollTo({
+        top: scrollContainer.scrollHeight,
+        behavior: 'smooth',
+      });
+    });
+  }, [
+    hasConversation,
+    messages.length,
+    streamingActivitySignature,
+    researchPlan,
+    isPlanning,
+    isLoading,
+    error,
+    result,
+  ]);
 
   const persistMessagesToSession = useCallback((sessionId: string, nextMessages: ConversationMessage[]) => {
     const existingSession = sessionsRef.current.find((session) => session.id === sessionId);
@@ -560,9 +614,10 @@ export default function Home() {
 
       shouldRevealPlan = true;
       setResearchPlan(normalizedPlan);
-    } catch {
-      shouldRevealPlan = true;
-      setResearchPlan(createResearchPlan(requestedQuery));
+    } catch (planError) {
+      setResearchPlan(null);
+      setLocalQuery(requestedQuery);
+      setError(planError instanceof Error ? planError.message : 'Research plan generation failed. Please try again.');
     } finally {
       if (!shouldRevealPlan) {
         setPlanning(false);
@@ -831,7 +886,7 @@ export default function Home() {
       />
 
       <main className="relative flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="z-40 flex h-16 shrink-0 items-center justify-between bg-background/85 px-4 backdrop-blur-xl lg:px-6">
+        <header className="z-40 flex h-12 shrink-0 items-center justify-between bg-background/85 px-4 backdrop-blur-xl lg:px-5">
           <div className="flex items-center gap-2 lg:hidden">
             <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-foreground text-background">
               <Sparkles className="h-5 w-5" />
@@ -865,13 +920,13 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-4 pb-64 pt-8 md:px-8">
+        <div ref={conversationScrollRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-4 pb-48 pt-5 md:px-5">
             {!hasConversation && (
               <div className="flex flex-1 items-center justify-center">
                 <div className="max-w-2xl text-center">
-                  <div className="mx-auto mb-6 flex h-12 w-12 items-center justify-center rounded-2xl bg-foreground text-background">
-                    <Sparkles className="h-6 w-6" />
+                  <div className="mx-auto mb-6 flex h-11 w-11 items-center justify-center rounded-2xl bg-foreground text-background">
+                    <Sparkles className="h-5 w-5" />
                   </div>
                   <h1 className="text-4xl font-semibold md:text-5xl">
                     What should we research?
@@ -884,7 +939,7 @@ export default function Home() {
             )}
 
             {hasConversation && (
-              <div className="space-y-8">
+              <div className="space-y-6">
                 {visibleMessages.map((message) => (
                   message.role === 'user' ? (
                     <UserBubble key={message.id} content={message.content} />
@@ -893,8 +948,10 @@ export default function Home() {
                   )
                 ))}
 
-                {shouldShowPlanShell && (
-                  <div className="mx-auto max-w-[820px]">
+                {isPlanning && !activePlan && <ThinkingDots />}
+
+                {shouldShowPlanPanel && (
+                  <div className="mx-auto max-w-[700px]">
                     <ResearchPlanPanel
                       key={activePlan
                         ? `${activePlan.query}-${activePlan.steps.map((step) => step.id).join('-')}`
@@ -917,7 +974,7 @@ export default function Home() {
                 )}
 
                 {isLoading && !hasInlineRunningActivity && (
-                  <div className="mx-auto max-w-[900px]">
+                  <div className="mx-auto max-w-[720px]">
                     <LoadingState />
                   </div>
                 )}
@@ -934,7 +991,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-background via-background/95 to-transparent px-4 pb-4 pt-16">
+        <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-background via-background/95 to-transparent px-4 pb-3 pt-12">
           <SearchForm
             query={localQuery}
             isLoading={isLoading}

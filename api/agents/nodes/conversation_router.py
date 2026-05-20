@@ -11,8 +11,8 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts
-from deerflow.sandbox import LocalSandboxProvider
-from deerflow.sandbox.tools import SandboxToolRunner, sandbox_openai_tool_specs
+from runtime_sandbox.sandbox import LocalSandboxProvider
+from runtime_sandbox.sandbox.tools import SandboxToolRunner, sandbox_openai_tool_specs
 from services.langfuse_observability import ainvoke_langchain, astream_langchain, get_langfuse_tracer
 
 
@@ -111,18 +111,17 @@ async def classify_research_intent_node(state: dict[str, Any]) -> dict[str, Any]
     query = _normalized_query(state)
     latest_result = state.get("latest_result")
 
-    if not latest_result:
-        return _classify_new_turn_intent_by_rules(query)
-
     try:
-        return await _classify_follow_up_intent_with_llm(query, latest_result)
+        return await _classify_intent_with_llm(query, latest_result)
     except Exception:
+        if not latest_result:
+            return _classify_new_turn_intent_by_rules(query)
         return _classify_follow_up_intent_by_rules(query, latest_result)
 
 
-async def _classify_follow_up_intent_with_llm(
+async def _classify_intent_with_llm(
     query: str,
-    latest_result: dict[str, Any],
+    latest_result: dict[str, Any] | None,
 ) -> dict[str, str]:
     llm = ChatOpenAI(
         model=settings.llm_model,
@@ -130,11 +129,11 @@ async def _classify_follow_up_intent_with_llm(
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
     )
-    prompt = _build_follow_up_intent_prompt()
+    prompt = _build_intent_prompt()
     chain = prompt | llm
     payload = {
         "query": query,
-        "artifact": _artifact_routing_context(latest_result),
+        "artifact": _artifact_routing_context(latest_result) if latest_result else "(none)",
     }
     config = _langchain_config("intent-router-llm", "intent-routing")
     response = await ainvoke_langchain(chain, payload, config)
@@ -148,6 +147,9 @@ async def _classify_follow_up_intent_with_llm(
 
 
 def _classify_follow_up_intent_by_rules(query: str, latest_result: dict[str, Any]) -> dict[str, str]:
+    if _is_coding_request(query):
+        return {"intent": "coding_help", "reason": "The request asks for code or programming help."}
+
     if _contains_any(query, SOURCE_TERMS):
         return {"intent": "source_question"}
 
@@ -158,7 +160,7 @@ def _classify_follow_up_intent_by_rules(query: str, latest_result: dict[str, Any
 
 
 def _classify_new_turn_intent_by_rules(query: str) -> dict[str, str]:
-    if _contains_any(query, CODING_TERMS):
+    if _is_coding_request(query):
         return {"intent": "coding_help", "reason": "The request asks for code or programming help."}
 
     if _is_likely_direct_answer(query):
@@ -167,7 +169,11 @@ def _classify_new_turn_intent_by_rules(query: str) -> dict[str, str]:
     return {"intent": "new_research", "reason": "The request may need fresh source discovery."}
 
 
-def _build_follow_up_intent_prompt() -> ChatPromptTemplate:
+def _is_coding_request(query: str) -> bool:
+    return _contains_any(query, CODING_TERMS)
+
+
+def _build_intent_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages([
         (
             "system",
@@ -175,15 +181,18 @@ def _build_follow_up_intent_prompt() -> ChatPromptTemplate:
 
 Return valid JSON only:
 {{
-  "intent": "source_question | artifact_follow_up | new_research",
+  "intent": "source_question | artifact_follow_up | coding_help | direct_answer | new_research",
   "reason": "brief reason"
 }}
 
 Choose source_question when the user asks about sources, citations, documents, links, data provenance, or which returned document they mean.
 Choose artifact_follow_up when the user asks to summarize, explain, rewrite, translate, reformat, expand, or clarify using the previous report/artifact.
+Choose coding_help when the user asks to write, edit, debug, run, test, inspect, or reason about code or files.
+Choose direct_answer when the user asks a stable conceptual question that does not require web search, artifact use, or code execution.
 Choose new_research when answering requires a fresh web search, a new topic, updated facts, or new evidence beyond the previous artifact.
 
-Prefer using the previous artifact when the question can reasonably be answered from it.""",
+Prefer using the previous artifact when the question can reasonably be answered from it.
+Prefer coding_help over new_research for software engineering or file execution tasks.""",
         ),
         (
             "user",

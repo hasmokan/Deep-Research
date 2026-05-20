@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase
 
-from deerflow.sandbox import LocalSandbox, LocalSandboxProvider
+from runtime_sandbox.sandbox import LocalSandbox, LocalSandboxProvider
 
 
 class LocalSandboxTests(TestCase):

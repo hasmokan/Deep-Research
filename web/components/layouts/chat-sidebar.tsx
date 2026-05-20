@@ -20,8 +20,8 @@ interface ChatSidebarProps {
 }
 
 const CHAT_SIDEBAR_WIDTH = {
-  defaultWidth: 300,
-  constraints: { min: 220, max: 520 },
+  defaultWidth: 210,
+  constraints: { min: 180, max: 360 },
 };
 
 export function ChatSidebar({
@@ -42,23 +42,23 @@ export function ChatSidebar({
       className="relative hidden h-screen shrink-0 border-r border-border bg-card lg:flex lg:flex-col"
       style={{ width: sidebarWidth.width }}
     >
-      <div className="px-5 pb-3 pt-5">
-        <h1 className="text-2xl font-semibold text-foreground">deepresearch</h1>
+      <div className="px-4 pb-3 pt-5">
+        <h1 className="text-lg font-semibold text-foreground">deepresearch</h1>
       </div>
 
-      <nav className="px-3">
+      <nav className="px-2.5">
         <Button
           type="button"
           variant="secondary"
-          className="h-11 w-full justify-start rounded-[10px] px-3 text-base font-medium"
+          className="h-9 w-full justify-start rounded-[9px] px-2.5 text-sm font-medium"
           onClick={onNewChat}
         >
-          <Edit3 className="h-5 w-5" />
+          <Edit3 className="h-4 w-4" />
           New chat
         </Button>
       </nav>
 
-      <div className="mt-6 min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      <div className="mt-5 min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Chats</p>
         <div className="grid gap-1">
           {visibleSessions.length > 0 ? (
@@ -67,7 +67,7 @@ export function ChatSidebar({
                 key={session.id}
                 type="button"
                 onClick={() => onSelectSession(session.id)}
-                className={`truncate rounded-[9px] px-3 py-2.5 text-left text-sm transition-smooth hover:bg-muted ${
+                className={`truncate rounded-[8px] px-3 py-2 text-left text-sm transition-smooth hover:bg-muted ${
                   session.id === activeSessionId ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground'
                 }`}
               >

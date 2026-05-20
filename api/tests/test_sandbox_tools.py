@@ -2,8 +2,8 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase
 
-from deerflow.sandbox import LocalSandboxProvider
-from deerflow.sandbox.tools import SandboxToolRunner, sandbox_tool_specs
+from runtime_sandbox.sandbox import LocalSandboxProvider
+from runtime_sandbox.sandbox.tools import SandboxToolRunner, sandbox_tool_specs
 
 
 class SandboxToolRunnerTests(TestCase):

@@ -134,8 +134,8 @@
 @layer components {
   .research-markdown {
     color: var(--foreground);
-    font-size: 15px;
-    line-height: 1.82;
+    font-size: 13px;
+    line-height: 1.65;
     letter-spacing: 0;
     overflow-wrap: anywhere;
   }
@@ -159,30 +159,30 @@
   }
 
   .research-markdown h1 {
-    margin: 0 0 18px;
-    padding-bottom: 14px;
+    margin: 0 0 14px;
+    padding-bottom: 12px;
     border-bottom: 1px solid var(--border);
-    font-size: 24px;
+    font-size: 20px;
   }
 
   .research-markdown h2 {
-    margin: 30px 0 12px;
-    padding-top: 4px;
-    font-size: 19px;
+    margin: 22px 0 10px;
+    padding-top: 2px;
+    font-size: 17px;
   }
 
   .research-markdown h3 {
-    margin: 22px 0 10px;
-    font-size: 16px;
-  }
-
-  .research-markdown h4 {
     margin: 18px 0 8px;
     font-size: 15px;
   }
 
+  .research-markdown h4 {
+    margin: 14px 0 7px;
+    font-size: 14px;
+  }
+
   .research-markdown p {
-    margin: 10px 0;
+    margin: 8px 0;
     color: color-mix(in srgb, var(--foreground) 88%, transparent);
   }
 
@@ -200,12 +200,12 @@
 
   .research-markdown ul,
   .research-markdown ol {
-    margin: 10px 0 14px;
-    padding-left: 1.35rem;
+    margin: 8px 0 12px;
+    padding-left: 1.2rem;
   }
 
   .research-markdown li {
-    margin: 5px 0;
+    margin: 4px 0;
     padding-left: 0.15rem;
   }
 
@@ -249,16 +249,16 @@
   .research-markdown table {
     display: block;
     width: 100%;
-    margin: 16px 0;
+    margin: 12px 0;
     overflow-x: auto;
     border-collapse: collapse;
-    font-size: 14px;
+    font-size: 12px;
   }
 
   .research-markdown th,
   .research-markdown td {
     border: 1px solid var(--border);
-    padding: 8px 10px;
+    padding: 6px 8px;
     text-align: left;
     vertical-align: top;
   }
@@ -270,7 +270,7 @@
   }
 
   .research-markdown hr {
-    margin: 24px 0;
+    margin: 18px 0;
     border: 0;
     border-top: 1px solid var(--border);
   }

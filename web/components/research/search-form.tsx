@@ -96,7 +96,7 @@ export function SearchForm({
   return (
     <form
       onSubmit={handleSubmit}
-      className="pointer-events-auto mx-auto w-full max-w-3xl rounded-[24px] border border-border bg-card/96 p-2.5 shadow-[0_18px_70px_rgba(0,0,0,0.16)] backdrop-blur-2xl dark:shadow-[0_18px_70px_rgba(0,0,0,0.45)]"
+      className="pointer-events-auto mx-auto w-full max-w-xl rounded-[18px] border border-border bg-card/96 p-2 shadow-[0_10px_36px_rgba(0,0,0,0.13)] backdrop-blur-2xl dark:shadow-[0_10px_36px_rgba(0,0,0,0.34)]"
     >
       <Textarea
         placeholder="Get a detailed report"
@@ -105,7 +105,7 @@ export function SearchForm({
         onKeyDown={handleTextareaKeyDown}
         disabled={isLoading || isPlanning}
         rows={2}
-        className="min-h-12 resize-none border-0 bg-transparent px-4 py-2 text-base shadow-none focus-visible:ring-0"
+        className="min-h-9 resize-none border-0 bg-transparent px-3 py-1.5 text-sm shadow-none focus-visible:ring-0"
       />
 
       <div className="flex flex-wrap items-center justify-between gap-2 px-1">
@@ -114,7 +114,7 @@ export function SearchForm({
             type="button"
             variant="ghost"
             size="icon"
-            className="h-9 w-9 rounded-full"
+            className="h-8 w-8 rounded-full"
             aria-label="Add attachment"
           >
             <Plus className="h-4 w-4" />
@@ -122,7 +122,7 @@ export function SearchForm({
           <Button
             type="button"
             variant={isDeepResearchMode ? 'secondary' : 'ghost'}
-            className="h-9 rounded-full px-3 text-sm"
+            className="h-8 rounded-full px-2.5 text-xs"
             aria-pressed={isDeepResearchMode}
             onClick={onToggleDeepResearchMode}
           >
@@ -132,7 +132,7 @@ export function SearchForm({
           <Button
             type="button"
             variant="ghost"
-            className="h-9 rounded-full px-3 text-sm"
+            className="h-8 rounded-full px-2.5 text-xs"
           >
             <Grid2X2 className="h-4 w-4" />
             Apps
@@ -140,7 +140,7 @@ export function SearchForm({
           <Button
             type="button"
             variant="ghost"
-            className="h-9 rounded-full px-3 text-sm"
+            className="h-8 rounded-full px-2.5 text-xs"
           >
             <Globe2 className="h-4 w-4" />
             Sites
@@ -151,7 +151,7 @@ export function SearchForm({
           <Button
             type="button"
             variant="ghost"
-            className="hidden h-9 rounded-full px-3 text-sm text-muted-foreground sm:inline-flex"
+            className="hidden h-8 rounded-full px-2.5 text-xs text-muted-foreground sm:inline-flex"
           >
             Pro
           </Button>
@@ -159,7 +159,7 @@ export function SearchForm({
             type="button"
             variant="ghost"
             size="icon"
-            className="h-9 w-9 rounded-full"
+            className="h-8 w-8 rounded-full"
             aria-label="Voice input"
           >
             <Mic className="h-4 w-4" />
@@ -168,7 +168,7 @@ export function SearchForm({
             type="submit"
             disabled={(!currentQuery && !isLoading) || isPlanning}
             size="icon"
-            className="h-10 w-10 rounded-full bg-foreground text-background hover:bg-foreground/90"
+            className="h-9 w-9 rounded-full bg-foreground text-background hover:bg-foreground/90"
             aria-label={isLoading ? 'Stop research' : isPlanning ? 'Creating plan' : hasPlan ? 'Start research' : 'Create plan'}
           >
             {isLoading ? (

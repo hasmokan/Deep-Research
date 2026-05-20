@@ -54,8 +54,8 @@ export interface ResearchActivityStream {
 const DEFAULT_VISIBLE_AGENT_EVENTS = 2;
 export const PLAN_FIRST_STEP_REVEAL_DELAY_MS = 120;
 export const PLAN_STEP_REVEAL_INTERVAL_MS = 520;
-const REPORT_ARTIFACT_DETAIL = 'Full report opened in the artifact panel. The chat timeline keeps the research steps, sources, status, and model thinking process.';
-const DRAFT_CONTENT_DETAIL = 'Draft content is kept out of the chat timeline. The timeline keeps the research steps, sources, status, and model thinking process.';
+const REPORT_ARTIFACT_DETAIL = 'Full report opens in the artifact panel when ready.';
+const DRAFT_CONTENT_DETAIL = 'Drafting analysis from the collected evidence.';
 
 export function getResearchQueryOverride(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -171,13 +171,51 @@ function isLargeMarkdownDraft(title: string, detail: string) {
   );
 }
 
+function markdownDraftNotes(detail: string, fallback: string) {
+  const text = detail.trim();
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const notes: string[] = [];
+
+  for (const line of lines) {
+    const heading = line.match(/^#{2,4}\s+(.+)/);
+    if (heading?.[1]) {
+      notes.push(`Structuring section: ${heading[1].replace(/\*\*/g, '').trim()}`);
+      continue;
+    }
+
+    const bullet = line.match(/^[-*]\s+(.+)/);
+    if (bullet?.[1]) {
+      notes.push(bullet[1].replace(/\*\*/g, '').trim());
+      continue;
+    }
+
+    if (notes.length >= 4) {
+      break;
+    }
+  }
+
+  const uniqueNotes = [...new Set(notes)]
+    .map((note) => note.replace(/^[-*]\s*/, '').trim())
+    .filter(Boolean)
+    .slice(0, 4);
+
+  if (!uniqueNotes.length) {
+    return fallback;
+  }
+
+  return uniqueNotes.map((note) => `• ${note}`).join('\n');
+}
+
 function getThinkingDetail(message: ResearchStreamThinking) {
   if (message.stage === 'report' && isLargeMarkdownDraft(message.label, message.text)) {
-    return REPORT_ARTIFACT_DETAIL;
+    return `${markdownDraftNotes(message.text, 'Synthesizing the final report.')}\n${REPORT_ARTIFACT_DETAIL}`;
   }
 
   if (message.stage === 'analyze' && isLargeMarkdownDraft(message.label, message.text)) {
-    return DRAFT_CONTENT_DETAIL;
+    return markdownDraftNotes(message.text, DRAFT_CONTENT_DETAIL);
   }
 
   return message.text;
@@ -185,11 +223,11 @@ function getThinkingDetail(message: ResearchStreamThinking) {
 
 function getTraceDetail(event: ResearchStreamTrace) {
   if (event.stage === 'report' && isLargeMarkdownDraft(event.title, event.detail)) {
-    return REPORT_ARTIFACT_DETAIL;
+    return `${markdownDraftNotes(event.detail, 'Synthesizing the final report.')}\n${REPORT_ARTIFACT_DETAIL}`;
   }
 
   if (event.stage === 'analyze' && isLargeMarkdownDraft(event.title, event.detail)) {
-    return DRAFT_CONTENT_DETAIL;
+    return markdownDraftNotes(event.detail, DRAFT_CONTENT_DETAIL);
   }
 
   return event.detail;

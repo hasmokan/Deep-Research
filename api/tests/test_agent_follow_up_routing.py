@@ -265,14 +265,44 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
         self.assertIn("print('ok')", payload["answer"])
         _FakeChain.chunks = None
 
+    async def test_first_turn_create_and_run_file_routes_to_coding(self):
+        from agents.nodes import conversation_router
+
+        state = {
+            "query": "创建 hello.py 打印 ok，然后运行它",
+            "display_query": "创建 hello.py 打印 ok，然后运行它",
+            "latest_result": None,
+        }
+
+        routed_state = await _classify_with_fake_llm(conversation_router, state, "coding_help")
+
+        self.assertEqual(routed_state["intent"], "coding_help")
+        self.assertEqual(conversation_router.route_research_intent(routed_state), "answer_coding")
+
+    async def test_follow_up_coding_request_routes_to_coding_not_new_research(self):
+        from agents.nodes import conversation_router
+
+        state = {
+            "query": "帮我写一段 ai 代码",
+            "display_query": "帮我写一段 ai 代码",
+            "latest_result": LATEST_RESULT,
+        }
+
+        routed_state = await _classify_with_fake_llm(conversation_router, state, "coding_help")
+
+        self.assertEqual(routed_state["intent"], "coding_help")
+        self.assertEqual(conversation_router.route_research_intent({**state, **routed_state}), "answer_coding")
+
     async def test_public_identity_question_still_routes_to_web_research(self):
         from agents.nodes import conversation_router
 
-        routed_state = await conversation_router.classify_research_intent_node({
+        state = {
             "query": "谁是hasmokan",
             "display_query": "谁是hasmokan",
             "latest_result": None,
-        })
+        }
+
+        routed_state = await _classify_with_fake_llm(conversation_router, state, "new_research")
 
         self.assertEqual(routed_state["intent"], "new_research")
         self.assertEqual(conversation_router.route_research_intent(routed_state), "web_search")

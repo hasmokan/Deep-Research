@@ -15,8 +15,8 @@ interface ReportSidebarProps {
 }
 
 const REPORT_SIDEBAR_WIDTH = {
-  defaultWidth: 760,
-  constraints: { min: 420, max: 960 },
+  defaultWidth: 480,
+  constraints: { min: 360, max: 720 },
 };
 
 function getDocumentTitle(document: Document, index: number) {
@@ -71,7 +71,7 @@ export function ReportSidebar({ result }: ReportSidebarProps) {
           }
         }}
       />
-      <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-card/95 px-5 backdrop-blur-xl">
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur-xl">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-foreground">
             {result.query}
@@ -79,18 +79,18 @@ export function ReportSidebar({ result }: ReportSidebarProps) {
           <p className="mt-0.5 text-xs text-muted-foreground">Research report</p>
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" aria-label="Open report">
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" aria-label="Open report">
             <Maximize2 className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" aria-label="Export report">
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" aria-label="Export report">
             <Download className="h-4 w-4" />
           </Button>
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        <div className="mx-auto max-w-[680px] rounded-[18px] border border-border bg-card px-7 py-6 shadow-[0_18px_70px_rgba(0,0,0,0.08)] dark:shadow-[0_18px_70px_rgba(0,0,0,0.35)]">
-          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div className="mx-auto max-w-[440px] rounded-[12px] border border-border bg-card px-4 py-4 shadow-[0_10px_36px_rgba(0,0,0,0.07)] dark:shadow-[0_10px_36px_rgba(0,0,0,0.28)]">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs text-muted-foreground">
             <CheckCircle2 className="h-3.5 w-3.5" />
             Research complete
           </div>
