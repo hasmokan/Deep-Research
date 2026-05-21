@@ -50,7 +50,7 @@ interface CreateAssistantResearchActivityMessageOptions {
 
 const DEFAULT_MAX_MESSAGES = 8;
 const DEFAULT_MAX_CONTENT_LENGTH = 3000;
-const RESEARCH_STREAM_STAGES = new Set(['route', 'answer', 'coding', 'search', 'analyze', 'report']);
+const RESEARCH_STREAM_STAGES = new Set(['route', 'react', 'answer', 'coding', 'search', 'analyze', 'report']);
 const RESEARCH_THINKING_STAGES = new Set(['answer', 'coding', 'analyze', 'report']);
 
 function createMessageId(prefix: ConversationRole) {
@@ -443,7 +443,11 @@ export function completeResearchActivityMessage(
       ...message,
       content: result.answer || `Answered from the previous report for "${result.query}".`,
       result,
-      researchActivity: undefined,
+      researchActivity: {
+        ...message.researchActivity,
+        status: 'completed',
+        updatedAt: now,
+      },
     };
   }
 

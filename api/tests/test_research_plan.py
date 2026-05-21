@@ -395,6 +395,42 @@ class ResearchPlanGenerationTests(IsolatedAsyncioTestCase):
         self.assertFalse(result["should_plan"])
         self.assertEqual(result["reason"], "Simple source question.")
 
+    async def test_plan_need_assessment_uses_model_for_coding_requests(self):
+        from agents.nodes import plan
+
+        class FakeResponse:
+            content = '{"should_plan": false, "reason": "Direct coding request."}'
+
+        class FakeChain:
+            async def ainvoke(self, payload):
+                self.payload = payload
+                return FakeResponse()
+
+        class FakePrompt:
+            def __or__(self, llm):
+                return FakeChain()
+
+        fake_settings = type(
+            "Settings",
+            (),
+            {
+                "openai_api_key": "api-key",
+                "openai_base_url": "https://api.example.test/v1",
+                "llm_model": "test-model",
+            },
+        )()
+
+        with (
+            patch.object(plan, "settings", fake_settings),
+            patch.object(plan.ChatPromptTemplate, "from_messages", return_value=FakePrompt()),
+            patch.object(plan, "ChatOpenAI") as chat_openai,
+        ):
+            result = await plan.assess_research_plan_need("帮我写一段力扣代码")
+
+        chat_openai.assert_called_once()
+        self.assertFalse(result["should_plan"])
+        self.assertEqual(result["reason"], "Direct coding request.")
+
 
 def _parse_sse_events(text: str) -> list[dict]:
     events = []

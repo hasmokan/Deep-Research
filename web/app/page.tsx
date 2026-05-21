@@ -104,19 +104,27 @@ function AssistantResultMessage({ message }: { message: ConversationMessage }) {
 
   if (message.result?.result_type === 'answer') {
     return (
-      <div className="mx-auto w-full max-w-[640px]">
-        <div className="flex gap-3">
-          <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
-            <CheckCircle2 className="h-3.5 w-3.5" />
+      <>
+        {message.researchActivity && (
+          <div className="mx-auto w-full max-w-[680px]">
+            <LoadingState activity={message.researchActivity} />
           </div>
-          <article className="min-w-0 flex-1">
-            <MarkdownContent
-              content={message.result.answer || message.result.report || message.content}
-              className="text-sm leading-6"
-            />
-          </article>
+        )}
+
+        <div className="mx-auto w-full max-w-[640px]">
+          <div className="flex gap-3">
+            <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            </div>
+            <article className="min-w-0 flex-1">
+              <MarkdownContent
+                content={message.result.answer || message.result.report || message.content}
+                className="text-sm leading-6"
+              />
+            </article>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 

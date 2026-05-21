@@ -173,6 +173,19 @@ async def stream_research_events(
                     "route": route,
                     "reason": state.get("reason"),
                 })
+            yield record_event(
+                "trace",
+                _trace_event(
+                    "route",
+                    "reasoning",
+                    "Route selected",
+                    _route_trace_detail(state, route),
+                    intent=state.get("intent"),
+                    route=route,
+                    reason=state.get("reason"),
+                ),
+            )
+            await asyncio.sleep(0)
 
             if route == "answer_coding":
                 yield record_event(
@@ -251,6 +264,18 @@ async def stream_research_events(
                     },
                 )
                 await asyncio.sleep(0)
+                yield record_event(
+                    "trace",
+                    _trace_event(
+                        "react",
+                        "reasoning",
+                        "Run ReAct agent",
+                        "Starting a ReAct loop with model reasoning, tool calls, and observations.",
+                        route=route,
+                        tool_policy="model-selected",
+                    ),
+                )
+                await asyncio.sleep(0)
                 with tracer.start(
                     "react-agent",
                     as_type="agent",
@@ -263,6 +288,8 @@ async def stream_research_events(
                         if event_type == "agent_message":
                             message = react_event.get("message") if isinstance(react_event.get("message"), dict) else {}
                             yield record_event("agent_message", message)
+                            for trace_event in _trace_events_from_agent_message(message):
+                                yield record_event("trace", trace_event)
                             _merge_react_documents(state, message)
                             await asyncio.sleep(0)
                         elif event_type == "clarification":
@@ -622,6 +649,15 @@ def _result_payload(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _route_trace_detail(state: dict[str, Any], route: str) -> str:
+    intent = str(state.get("intent") or "unknown")
+    reason = str(state.get("reason") or "").strip()
+    detail = f"Intent {intent} routed to {route}."
+    if reason:
+        return f"{detail} {reason}"
+    return detail
+
+
 def _thinking_payload(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": event.get("id") or f"{event.get('stage', 'report')}-thinking",
@@ -660,6 +696,167 @@ def _agent_tool_content(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False)
+
+
+def _trace_events_from_agent_message(message: dict[str, Any]) -> list[dict[str, Any]]:
+    message_type = message.get("type")
+
+    if message_type == "ai":
+        return _trace_events_from_agent_ai_message(message)
+
+    if message_type == "tool":
+        trace_event = _trace_event_from_agent_tool_message(message)
+        return [trace_event] if trace_event else []
+
+    return []
+
+
+def _trace_events_from_agent_ai_message(message: dict[str, Any]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    message_id = str(message.get("id") or "agent")
+    reasoning = str(message.get("reasoning_content") or "").strip()
+
+    if reasoning:
+        events.append(
+            _trace_event(
+                "analyze",
+                "reasoning",
+                "Thinking",
+                reasoning,
+                id=f"{message_id}-reasoning",
+            )
+        )
+
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return events
+
+    for index, tool_call in enumerate(tool_calls):
+        if not isinstance(tool_call, dict):
+            continue
+
+        tool_name = str(tool_call.get("name") or "")
+        tool_args = tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {}
+        tool_call_id = str(tool_call.get("id") or f"{message_id}-tool-{index}")
+        extra: dict[str, Any] = {
+            "id": f"{tool_call_id}-call",
+            "tool": tool_name,
+        }
+        if tool_name == "web_search" and isinstance(tool_args.get("query"), str):
+            extra["query"] = tool_args["query"]
+
+        events.append(
+            _trace_event(
+                _stage_for_agent_tool(tool_name),
+                "tool_call",
+                _title_for_agent_tool_call(tool_name),
+                _detail_for_agent_tool_call(tool_name, tool_args),
+                **extra,
+            )
+        )
+
+    return events
+
+
+def _trace_event_from_agent_tool_message(message: dict[str, Any]) -> dict[str, Any] | None:
+    tool_name = str(message.get("name") or "")
+    tool_call_id = str(message.get("tool_call_id") or message.get("id") or tool_name or "tool")
+    content = str(message.get("content") or "")
+    documents = _documents_for_agent_tool_result(tool_name, content)
+    extra: dict[str, Any] = {
+        "id": f"{tool_call_id}-result",
+        "tool": tool_name,
+    }
+    if documents:
+        extra["documents"] = documents
+
+    return _trace_event(
+        _stage_for_agent_tool(tool_name),
+        "tool_result",
+        _title_for_agent_tool_result(tool_name),
+        _detail_for_agent_tool_result(tool_name, content, documents),
+        **extra,
+    )
+
+
+def _stage_for_agent_tool(tool_name: str) -> str:
+    if tool_name == "web_search":
+        return "search"
+    if tool_name == "ask_clarification":
+        return "answer"
+    if any(fragment in tool_name for fragment in ("file", "dir", "bash", "python")):
+        return "coding"
+    return "analyze"
+
+
+def _title_for_agent_tool_call(tool_name: str) -> str:
+    labels = {
+        "web_search": "Search web",
+        "ask_clarification": "Need your help",
+        "read_file": "Read file",
+        "list_dir": "List directory",
+        "bash": "Execute command",
+        "run_python": "Run Python",
+        "write_todos": "Write to-dos",
+    }
+    return labels.get(tool_name, f"Use {tool_name}")
+
+
+def _title_for_agent_tool_result(tool_name: str) -> str:
+    if tool_name == "web_search":
+        return "Sources found"
+    if tool_name == "ask_clarification":
+        return "Clarification requested"
+    return "Tool result"
+
+
+def _detail_for_agent_tool_call(tool_name: str, tool_args: dict[str, Any]) -> str:
+    if tool_name == "web_search" and isinstance(tool_args.get("query"), str):
+        return tool_args["query"]
+    if tool_name == "ask_clarification" and isinstance(tool_args.get("question"), str):
+        return tool_args["question"]
+    return json.dumps(tool_args, ensure_ascii=False, separators=(",", ":"))
+
+
+def _detail_for_agent_tool_result(
+    tool_name: str,
+    content: str,
+    documents: list[dict[str, Any]],
+) -> str:
+    if tool_name == "web_search":
+        count = len(documents)
+        return f"Found {count} source candidate{'s' if count != 1 else ''}."
+    return content
+
+
+def _documents_for_agent_tool_result(tool_name: str, content: str) -> list[dict[str, Any]]:
+    if tool_name != "web_search":
+        return []
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(payload, list):
+        return []
+
+    documents: list[dict[str, Any]] = []
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            continue
+        documents.append(
+            {
+                "id": item.get("id", f"agent-web-{index}"),
+                "title": item.get("title") or f"Source {index + 1}",
+                "url": item.get("url"),
+                "source": item.get("source"),
+                "provider": item.get("provider") or "react",
+                "type": item.get("type"),
+            }
+        )
+
+    return documents
 
 
 def _merge_react_documents(state: dict[str, Any], message: dict[str, Any]) -> None:

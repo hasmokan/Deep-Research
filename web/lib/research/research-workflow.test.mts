@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildResearchActivityFromAgentMessages,
   buildResearchActivity,
+  buildResearchActivityTimeline,
   buildResearchActivityStream,
   createResearchPlan,
   getRevealedPlanStepCount,
@@ -214,6 +215,67 @@ test('buildResearchActivityFromAgentMessages renders clarification as need-help 
     ],
   );
   assert.match(activity[2].detail, /你是想问 hasokan/);
+});
+
+test('buildResearchActivityTimeline keeps prior thinking when agent messages arrive', () => {
+  const activity = buildResearchActivityTimeline({
+    statuses: [
+      {
+        stage: 'react',
+        label: 'Reasoning',
+        message: 'Running a ReAct agent with tools.',
+      },
+    ],
+    thinking: [
+      {
+        id: 'cot-1',
+        stage: 'analyze',
+        label: 'Thinking',
+        text: 'First thinking log.',
+      },
+      {
+        id: 'cot-2',
+        stage: 'analyze',
+        label: 'Thinking',
+        text: 'Second thinking log.',
+      },
+    ],
+    documents: [],
+    trace: [
+      {
+        id: 'call-1-call',
+        stage: 'search',
+        kind: 'tool_call',
+        title: 'Search web',
+        detail: 'hasmokan',
+        tool: 'web_search',
+      },
+    ],
+    agentMessages: [
+      {
+        type: 'ai',
+        id: 'ai-1',
+        content: '',
+        reasoning_content: '',
+        tool_calls: [
+          {
+            id: 'call-1',
+            name: 'web_search',
+            args: { query: 'hasmokan' },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    activity.map((event) => [event.id, event.kind, event.title, event.detail]),
+    [
+      ['call-1-call', 'tool_call', 'Search web', 'hasmokan'],
+      ['cot-1', 'thinking', 'Thinking', 'First thinking log.'],
+      ['cot-2', 'thinking', 'Thinking', 'Second thinking log.'],
+    ],
+  );
 });
 
 test('buildResearchActivity summarizes report draft thinking instead of exposing the full report body', () => {

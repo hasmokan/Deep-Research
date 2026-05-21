@@ -44,7 +44,7 @@ class ConversationContextTests(TestCase):
         self.assertIn("user: 做研究", contextual_query)
         self.assertIn("assistant: Research report for 做研究", contextual_query)
 
-    def test_contextual_query_includes_local_memory_context(self):
+    def test_contextual_query_ignores_memory_context_without_thread_history(self):
         from agents.conversation_context import build_contextual_research_query
 
         contextual_query = build_contextual_research_query(
@@ -53,9 +53,23 @@ class ConversationContextTests(TestCase):
             memory_context="Local user memo:\nRecent research topics: deep research 部署",
         )
 
-        self.assertIn("Long-term user memo:", contextual_query)
-        self.assertIn("Recent research topics: deep research 部署", contextual_query)
-        self.assertIn("Current user request:\n继续研究", contextual_query)
+        self.assertEqual(contextual_query, "继续研究")
+
+    def test_contextual_query_does_not_include_memory_context(self):
+        from agents.conversation_context import build_contextual_research_query
+
+        contextual_query = build_contextual_research_query(
+            "谁是hasmokan",
+            [
+                {"role": "user", "content": "帮我查查夏日弥"},
+                {"role": "assistant", "content": "夏日弥可能是一个 B 站账号。"},
+            ],
+            memory_context="Recent research topics: 夏日弥; 爬楼梯代码",
+        )
+
+        self.assertIn("Previous conversation context:", contextual_query)
+        self.assertNotIn("Recent research topics", contextual_query)
+        self.assertIn("Current user request:\n谁是hasmokan", contextual_query)
 
 
 class ConversationResearchRouteTests(TestCase):
@@ -100,7 +114,6 @@ class ConversationResearchRouteTests(TestCase):
 
         state = agent.await_args.args[0]
         self.assertIn("Previous conversation context:", state["query"])
-        self.assertIn("Long-term user memo:", state["query"])
         self.assertIn("Current user request:\n展开第三点", state["query"])
         self.assertEqual(state["display_query"], "展开第三点")
         self.assertEqual(result["query"], "展开第三点")

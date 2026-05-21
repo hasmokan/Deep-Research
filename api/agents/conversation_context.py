@@ -17,46 +17,33 @@ def build_contextual_research_query(
     max_memory_chars: int = 2000,
     max_context_chars: int = 6000,
 ) -> str:
-    """Combine a follow-up request with recent conversation history."""
+    """Combine a request with recent in-thread conversation history."""
     normalized_query = query.strip()
-    memory = " ".join((memory_context or "").split())
     history = _normalize_messages(messages or [])
 
     if history and history[-1]["role"] == "user" and history[-1]["content"] == normalized_query:
         history = history[:-1]
 
-    if not history and not memory:
+    if not history:
         return normalized_query
 
-    context_sections = []
+    del memory_context, max_memory_chars
 
-    if memory:
-        if len(memory) > max_memory_chars:
-            memory = f"...{memory[-max_memory_chars:].strip()}"
-        context_sections.append(memory if memory.startswith("Long-term user memo:") else f"Long-term user memo:\n{memory}")
+    recent_history = history[-max_messages:]
+    context_lines = [
+        f"{message['role']}: {message['content']}"
+        for message in recent_history
+    ]
+    context = "\n".join(context_lines)
 
-    if history:
-        recent_history = history[-max_messages:]
-        context_lines = [
-            f"{message['role']}: {message['content']}"
-            for message in recent_history
-        ]
-        context = "\n".join(context_lines)
-
-        if len(context) > max_context_chars:
-            context = f"...{context[-max_context_chars:].strip()}"
-
-        context_sections.append(
-            "Previous conversation context:\n"
-            f"{context}"
-        )
-
-    combined_context = "\n\n".join(context_sections)
+    if len(context) > max_context_chars:
+        context = f"...{context[-max_context_chars:].strip()}"
 
     return (
-        "Use the available long-term memo and previous conversation context to resolve references, follow-up wording, "
-        "and implied scope. Then answer the current user request as a standalone deep research task.\n\n"
-        f"{combined_context}\n\n"
+        "Use the previous conversation context only when it is necessary to resolve references, follow-up wording, "
+        "or implied scope. Treat the current user request as authoritative.\n\n"
+        "Previous conversation context:\n"
+        f"{context}\n\n"
         "Current user request:\n"
         f"{normalized_query}"
     )

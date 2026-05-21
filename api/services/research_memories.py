@@ -15,9 +15,6 @@ from supabase import Client, create_client
 
 
 _SAFE_USER_ID = re.compile(r"^[A-Za-z0-9_-]+$")
-_MAX_RECENT_TOPICS = 12
-_MAX_CONTEXT_TOPICS = 6
-_MAX_CONTEXT_LENGTH = 1800
 
 
 class JsonResearchMemoryStore:
@@ -112,48 +109,19 @@ def create_research_memory_store():
 
 
 def remember_research_result(memory: dict[str, Any], result: dict[str, Any], *, now: str | None = None) -> dict[str, Any]:
-    query = _normalize_query(str(result.get("query") or ""))
-
-    if not query or result.get("status") != "completed":
-        return memory
-
-    timestamp = now or _now()
-    result_type = "answer" if result.get("result_type") == "answer" else "report"
-    recent_topics = [
-        topic
-        for topic in memory.get("recent_topics", [])
-        if _normalize_query(str(topic.get("query", ""))).lower() != query.lower()
-    ]
-    recent_topics = [
-        {"query": query, "result_type": result_type, "updated_at": timestamp},
-        *recent_topics,
-    ][:_MAX_RECENT_TOPICS]
-
-    return {
-        "user_id": memory.get("user_id", ""),
-        "summary": _summarize_topics(recent_topics),
-        "recent_topics": recent_topics,
-        "updated_at": timestamp,
-    }
+    """No-op until durable user memory has an explicit schema and writer."""
+    del result, now
+    return memory
 
 
 def build_memory_context(memory: dict[str, Any]) -> str:
-    topics = memory.get("recent_topics") if isinstance(memory.get("recent_topics"), list) else []
-    lines = [
-        memory.get("summary") if isinstance(memory.get("summary"), str) else "",
-        *[
-            f"- {topic.get('query')} ({topic.get('result_type')}, {topic.get('updated_at')})"
-            for topic in topics[:_MAX_CONTEXT_TOPICS]
-            if isinstance(topic, dict) and topic.get("query")
-        ],
-    ]
-    lines = [line for line in lines if line]
+    """Return prompt context for durable memory.
 
-    if not lines:
-        return ""
-
-    context = "\n".join(["Long-term user memo:", *lines])
-    return context[:_MAX_CONTEXT_LENGTH].strip()
+    Recent research queries are not durable memory, so they are intentionally
+    excluded from prompts.
+    """
+    del memory
+    return ""
 
 
 def _create_supabase_client() -> Client:
@@ -165,20 +133,12 @@ def _normalize_memory(memory: dict[str, Any] | None, user_id: str) -> dict[str, 
     if not isinstance(memory, dict):
         return _empty_memory(user_id)
 
-    topics = memory.get("recent_topics")
-    recent_topics = [
-        topic
-        for topic in topics
-        if _is_memory_topic(topic)
-    ] if isinstance(topics, list) else []
-
-    summary = memory.get("summary")
     updated_at = memory.get("updated_at")
 
     return {
         "user_id": user_id,
-        "summary": summary if isinstance(summary, str) else _summarize_topics(recent_topics),
-        "recent_topics": recent_topics,
+        "summary": "",
+        "recent_topics": [],
         "updated_at": updated_at if isinstance(updated_at, str) else _now(),
     }
 
@@ -190,26 +150,6 @@ def _empty_memory(user_id: str) -> dict[str, Any]:
         "recent_topics": [],
         "updated_at": _now(),
     }
-
-
-def _is_memory_topic(value: Any) -> bool:
-    if not isinstance(value, dict):
-        return False
-    return (
-        isinstance(value.get("query"), str)
-        and value.get("result_type") in {"report", "answer"}
-        and isinstance(value.get("updated_at"), str)
-    )
-
-
-def _summarize_topics(topics: list[dict[str, Any]]) -> str:
-    if not topics:
-        return ""
-    return "Recent research topics: " + "; ".join(str(topic.get("query")) for topic in topics[:5])
-
-
-def _normalize_query(query: str) -> str:
-    return " ".join(query.strip().split())
 
 
 def _validate_user_id(user_id: str) -> None:

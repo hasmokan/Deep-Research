@@ -369,7 +369,7 @@ test('completed research activity keeps trace and becomes result history', () =>
   assert.match(history[1].content, /Research report for "做研究"/);
 });
 
-test('artifact follow-up answers become inline assistant messages without research trace', () => {
+test('completed answer activity keeps trace beside the inline answer', () => {
   const activityMessage = createAssistantResearchActivityMessage('来源是？', {
     id: 'assistant-activity-1',
     now: '2026-05-16T10:00:00.000Z',
@@ -386,7 +386,8 @@ test('artifact follow-up answers become inline assistant messages without resear
   ]);
 
   assert.equal(completedMessage.result?.result_type, 'answer');
-  assert.equal(completedMessage.researchActivity, undefined);
+  assert.equal(completedMessage.researchActivity?.status, 'completed');
+  assert.equal(completedMessage.researchActivity?.query, '来源是？');
   assert.match(completedMessage.content, /https:\/\/example.com\/report/);
   assert.match(history[1].content, /上一份报告使用了这些来源/);
 });
@@ -425,7 +426,8 @@ test('streamed answer deltas render as the assistant message before completion',
   assert.equal(secondDelta.result?.answer, '```python\nprint("ok")\n```');
   assert.equal(secondDelta.researchActivity?.status, 'running');
   assert.equal(completedMessage.content, '```python\nprint("ok")\n```');
-  assert.equal(completedMessage.researchActivity, undefined);
+  assert.equal(completedMessage.researchActivity?.status, 'completed');
+  assert.equal(completedMessage.result?.answer, '```python\nprint("ok")\n```');
 });
 
 test('buildResearchRequestMessages skips activity-only assistant messages', () => {

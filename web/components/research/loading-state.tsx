@@ -8,9 +8,7 @@ import { useState } from 'react';
 import {
   Activity,
   Brain,
-  CheckCircle2,
   ChevronDown,
-  Circle,
   Code2,
   ExternalLink,
   FileSearch,
@@ -20,8 +18,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import {
-  buildResearchActivityFromAgentMessages,
-  buildResearchActivity,
+  buildResearchActivityTimeline,
   buildResearchActivityStream,
   type ResearchActivityEvent,
 } from '@/lib/research/research-workflow';
@@ -128,6 +125,10 @@ function EventIcon({ event, className }: { event: ResearchActivityEvent; classNa
   return <Sparkles className={className} />;
 }
 
+function isThinkingEvent(event: ResearchActivityEvent) {
+  return event.kind === 'thinking';
+}
+
 function shouldShowDocuments(event: ResearchActivityEvent) {
   return (
     (event.kind === 'sources' || event.kind === 'tool_result') &&
@@ -136,15 +137,54 @@ function shouldShowDocuments(event: ResearchActivityEvent) {
   );
 }
 
-function shouldShowThinkingBlock(event: ResearchActivityEvent) {
-  return event.kind === 'thinking' && event.detail.trim().length > 0;
-}
-
 function splitThinkingNotes(detail: string) {
   return detail
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^•\s*/, ''))
     .filter(Boolean);
+}
+
+function DocumentLinks({
+  documents,
+}: {
+  documents?: Array<Document | ResearchStreamTraceDocument>;
+}) {
+  if (!documents?.length) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {documents.slice(0, 6).map((document, documentIndex) => {
+        const url = getDocumentUrl(document);
+        const title = getDocumentTitle(document, documentIndex);
+
+        if (url) {
+          return (
+            <a
+              key={`${documentIndex}-${document.id}`}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex max-w-full items-center gap-1.5 rounded-[7px] border border-border/80 bg-background/80 px-2 py-1 text-[11px] text-foreground transition-smooth hover:bg-muted"
+            >
+              <span className="truncate">{title}</span>
+              <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+            </a>
+          );
+        }
+
+        return (
+          <span
+            key={`${documentIndex}-${document.id}`}
+            className="inline-flex max-w-full rounded-[7px] border border-border/80 bg-background/80 px-2 py-1 text-[11px] text-foreground"
+          >
+            <span className="truncate">{title}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 interface ActivityEventRowProps {
@@ -158,7 +198,8 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
   const shouldAnimateText = isStreaming && status === 'active' && event.detail.length > 0;
   const detail = useTypewriterText(event.detail, shouldAnimateText);
   const showCursor = shouldAnimateText && detail.length < event.detail.length;
-  const thinkingNotes = shouldShowThinkingBlock(event) ? splitThinkingNotes(detail) : [];
+  const usesThinkingMarker = isThinkingEvent(event);
+  const thinkingNotes = usesThinkingMarker ? splitThinkingNotes(detail) : [];
 
   return (
     <div
@@ -167,102 +208,82 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
         ${shouldAnimateText ? 'agent-active-row' : ''}
       `}
     >
-      <div className="relative flex w-5 shrink-0 justify-center">
+      <div className="relative flex w-5 shrink-0 justify-center pt-0.5">
         {!isLast && (
-          <span className="absolute left-1/2 top-7 h-[calc(100%-0.5rem)] w-px -translate-x-1/2 bg-border/80" />
+          <span className="absolute left-1/2 top-6 h-[calc(100%-0.25rem)] w-px -translate-x-1/2 bg-border/80" />
         )}
-        <div
-          className={`
-            relative z-10 flex h-5 w-5 items-center justify-center rounded-full border bg-background transition-smooth
-            ${status === 'completed'
-              ? 'border-foreground bg-foreground text-background'
-              : status === 'active'
-              ? 'animate-pulse-ring border-foreground/30 text-foreground'
-              : 'border-border text-muted-foreground'
-            }
-          `}
-        >
-          {status === 'completed' ? (
-            <CheckCircle2 className="h-3 w-3" />
-          ) : status === 'active' ? (
+        {usesThinkingMarker ? (
+          <span
+            className={`
+              relative z-10 mt-2 h-1.5 w-1.5 rounded-full transition-smooth
+              ${status === 'active'
+                ? 'bg-foreground ring-4 ring-foreground/10'
+                : status === 'completed'
+                ? 'bg-foreground/65'
+                : 'bg-muted-foreground/45'
+              }
+            `}
+          />
+        ) : (
+          <div
+            className={`
+              relative z-10 flex h-5 w-5 items-center justify-center rounded-[6px] border bg-background transition-smooth
+              ${status === 'active'
+                ? 'animate-pulse-ring border-foreground/35 text-foreground'
+                : status === 'completed'
+                ? 'border-border/90 text-foreground/75'
+                : 'border-border/80 text-muted-foreground'
+              }
+            `}
+          >
             <EventIcon event={event} className="h-3 w-3" />
-          ) : (
-            <Circle className="h-3 w-3" />
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <p
-            className={`
-              truncate text-xs font-medium
-              ${status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}
-            `}
-          >
-            {event.title}
-          </p>
-          {event.kind === 'tool_call' && (
-            <span className="rounded-full border border-border/70 bg-muted/60 px-2 py-0.5 text-[11px] text-muted-foreground">
-              tool
-            </span>
-          )}
-        </div>
-
-        {!shouldShowThinkingBlock(event) && (
-          <p className="text-xs leading-5 text-muted-foreground">
-            {detail}
+        {usesThinkingMarker ? (
+          <div className="space-y-1.5 text-xs leading-5 text-muted-foreground">
+            {thinkingNotes.length > 0 ? (
+              thinkingNotes.map((note, noteIndex) => (
+                <p key={`${event.id}-${noteIndex}`}>{note}</p>
+              ))
+            ) : (
+              <p>{event.title}</p>
+            )}
             {showCursor && (
               <span className="ml-0.5 inline-block h-4 w-px translate-y-0.5 animate-agent-cursor bg-foreground/70" />
             )}
-          </p>
-        )}
-
-        {shouldShowDocuments(event) && (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {event.documents?.slice(0, 8).map((document, documentIndex) => {
-              const url = getDocumentUrl(document);
-              const title = getDocumentTitle(document, documentIndex);
-
-              if (url) {
-                return (
-                  <a
-                    key={`${documentIndex}-${document.id}`}
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex max-w-full items-center gap-1.5 rounded-[7px] border border-border/80 bg-muted/50 px-2.5 py-1 text-xs text-foreground transition-smooth hover:bg-muted"
-                  >
-                    <span className="truncate">{title}</span>
-                    <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  </a>
-                );
-              }
-
-              return (
-                <span
-                  key={`${documentIndex}-${document.id}`}
-                  className="inline-flex max-w-full rounded-[7px] border border-border/80 bg-muted/50 px-2.5 py-1 text-xs text-foreground"
-                >
-                  <span className="truncate">{title}</span>
+          </div>
+        ) : (
+          <>
+            <div className="flex min-w-0 items-center gap-2">
+              <p
+                className={`
+                  truncate text-xs font-medium
+                  ${status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}
+                `}
+              >
+                {event.title}
+              </p>
+              {event.kind === 'tool_call' && (
+                <span className="rounded-full border border-border/70 bg-muted/60 px-2 py-0.5 text-[11px] text-muted-foreground">
+                  tool
                 </span>
-              );
-            })}
-          </div>
-        )}
+              )}
+            </div>
 
-        {shouldShowThinkingBlock(event) && (
-          <div className="mt-2 space-y-1.5 border-l border-border/80 pl-3 text-xs leading-5 text-foreground">
-            {thinkingNotes.map((note, noteIndex) => (
-              <div key={`${event.id}-${noteIndex}`} className="flex gap-2">
-                <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-foreground/55" />
-                <span>{note}</span>
-              </div>
-            ))}
-            {showCursor && (
-              <span className="ml-0.5 inline-block h-4 w-px translate-y-0.5 animate-agent-cursor bg-foreground/70" />
+            <p className="text-xs leading-5 text-muted-foreground">
+              {detail}
+              {showCursor && (
+                <span className="ml-0.5 inline-block h-4 w-px translate-y-0.5 animate-agent-cursor bg-foreground/70" />
+              )}
+            </p>
+
+            {shouldShowDocuments(event) && (
+              <DocumentLinks documents={event.documents} />
             )}
-          </div>
+          </>
         )}
       </div>
     </div>
@@ -271,59 +292,66 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
 
 export function LoadingState({ activity }: LoadingStateProps = {}) {
   const store = useResearchStore();
-  const [showOlderSteps, setShowOlderSteps] = useState(true);
+  const [showOlderSteps, setShowOlderSteps] = useState(false);
   const streamStatuses = activity?.streamStatuses ?? store.streamStatuses;
   const streamThinking = activity?.streamThinking ?? store.streamThinking;
   const streamDocuments = activity?.streamDocuments ?? store.streamDocuments;
   const streamTrace = activity?.streamTrace ?? store.streamTrace;
   const streamAgentMessages = activity?.streamAgentMessages ?? store.streamAgentMessages;
   const activityStatus = activity?.status ?? 'running';
-  const streamActivity = streamAgentMessages.length > 0
-    ? buildResearchActivityFromAgentMessages(streamAgentMessages)
-    : buildResearchActivity(streamStatuses, streamThinking, streamDocuments, streamTrace);
+  const streamActivity = buildResearchActivityTimeline({
+    statuses: streamStatuses,
+    thinking: streamThinking,
+    documents: streamDocuments,
+    trace: streamTrace,
+    agentMessages: streamAgentMessages,
+  });
   const activityStream = buildResearchActivityStream(streamActivity, showOlderSteps);
   const visibleActivity = activityStream.visibleEvents;
   const activeActivityIndex = visibleActivity.length - 1;
   const hasHiddenSteps = activityStream.hiddenCount > 0;
+  const hasActivityDetails = streamActivity.length > 0;
   const isRunning = activityStatus === 'running';
+  const stepCount = streamActivity.length;
 
   return (
-    <section className="relative w-full overflow-hidden rounded-[10px] border border-border/70 bg-background/85 p-1 shadow-sm">
+    <section className="relative w-full overflow-hidden rounded-[8px] border border-border/70 bg-background/85 p-0.5 shadow-sm">
       {isRunning && (
         <div className="pointer-events-none absolute inset-x-0 top-0 h-px overflow-hidden">
           <span className="block h-full w-1/3 animate-agent-trace-scan rounded-full bg-foreground/35" />
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3 px-2 py-2">
-        <button
-          type="button"
-          disabled={!hasHiddenSteps}
-          onClick={() => setShowOlderSteps((current) => !current)}
-          className="inline-flex min-w-0 items-center gap-2 rounded-[7px] px-2 py-1.5 text-sm font-medium text-muted-foreground transition-smooth hover:bg-muted/70 hover:text-foreground disabled:pointer-events-none disabled:opacity-70"
-        >
-          <ChevronDown
-            className={`h-4 w-4 shrink-0 transition-transform ${showOlderSteps ? 'rotate-180' : ''}`}
-          />
-          <span className="truncate">
-            {hasHiddenSteps ? activityStream.toggleLabel : 'Agent trace'}
-          </span>
-          {hasHiddenSteps && !showOlderSteps && (
-            <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-              {activityStream.hiddenCount}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {hasActivityDetails ? (
+            <button
+              type="button"
+              disabled={!hasHiddenSteps}
+              onClick={() => setShowOlderSteps((current) => !current)}
+              className="inline-flex min-w-0 items-center gap-2 rounded-[7px] px-1.5 py-1 text-sm font-medium text-muted-foreground transition-smooth hover:bg-muted/70 hover:text-foreground disabled:pointer-events-none disabled:opacity-70"
+            >
+              <ChevronDown
+                className={`h-3.5 w-3.5 shrink-0 transition-transform ${showOlderSteps ? 'rotate-180' : ''}`}
+              />
+              <span className="truncate">
+                {hasHiddenSteps ? activityStream.toggleLabel : 'Agent trace'}
+              </span>
+            </button>
+          ) : (
+            <span className="px-1.5 py-1 text-sm font-medium text-muted-foreground">
+              Agent trace
             </span>
           )}
-        </button>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {stepCount > 0
+              ? `${stepCount} step${stepCount === 1 ? '' : 's'}`
+              : 'Waiting'}
+          </span>
+        </div>
 
         <div className="inline-flex shrink-0 items-center gap-2 rounded-[7px] border border-border/70 bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground">
-          {isRunning ? (
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-agent-live-ping rounded-full bg-foreground/30" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-foreground" />
-            </span>
-          ) : (
-            <Activity className="h-3.5 w-3.5" />
-          )}
+          <Activity className={`h-3.5 w-3.5 ${isRunning ? 'animate-pulse' : ''}`} />
           {getBadgeLabel(activityStatus)}
         </div>
       </div>
@@ -337,7 +365,7 @@ export function LoadingState({ activity }: LoadingStateProps = {}) {
       <div className="px-3 pb-3">
         {visibleActivity.length === 0 ? (
           <div className="flex items-center gap-3 border-l border-border/80 py-3 pl-3 text-sm text-muted-foreground">
-            <span className="relative flex h-5 w-5 items-center justify-center rounded-full border border-foreground/25 text-foreground">
+            <span className="relative flex h-5 w-5 items-center justify-center rounded-[6px] border border-foreground/25 text-foreground">
               <Activity className="h-3.5 w-3.5 animate-pulse" />
             </span>
             <span>Waiting for backend agent events</span>
@@ -361,6 +389,17 @@ export function LoadingState({ activity }: LoadingStateProps = {}) {
             />
           );
         })}
+
+        {hasHiddenSteps && !showOlderSteps && (
+          <button
+            type="button"
+            onClick={() => setShowOlderSteps(true)}
+            className="mt-1 flex w-full items-center gap-2 rounded-[7px] px-1 py-2 text-left text-sm text-muted-foreground transition-smooth hover:bg-muted/60 hover:text-foreground"
+          >
+            <ChevronDown className="h-4 w-4 rotate-[-90deg]" />
+            <span>{activityStream.hiddenCount} earlier step{activityStream.hiddenCount === 1 ? '' : 's'}</span>
+          </button>
+        )}
       </div>
 
       {isRunning && (

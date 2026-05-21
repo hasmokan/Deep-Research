@@ -113,7 +113,7 @@ export interface ResearchPlanStreamHandlers {
 }
 
 export interface ResearchStreamStatus {
-  stage: 'route' | 'answer' | 'coding' | 'search' | 'analyze' | 'report';
+  stage: 'route' | 'react' | 'answer' | 'coding' | 'search' | 'analyze' | 'report';
   label: string;
   message: string;
 }
@@ -136,7 +136,7 @@ export interface ResearchStreamTraceDocument {
 
 export interface ResearchStreamTrace {
   id: string;
-  stage: 'route' | 'answer' | 'coding' | 'search' | 'analyze' | 'report';
+  stage: 'route' | 'react' | 'answer' | 'coding' | 'search' | 'analyze' | 'report';
   kind: 'tool_call' | 'tool_result' | 'reasoning';
   title: string;
   detail: string;

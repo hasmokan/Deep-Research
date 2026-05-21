@@ -21,91 +21,6 @@ _coding_sandbox_provider: LocalSandboxProvider | None = None
 INTENTS = {"source_question", "artifact_follow_up", "coding_help", "direct_answer", "new_research"}
 JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
-SOURCE_TERMS = (
-    "来源",
-    "出处",
-    "引用",
-    "参考",
-    "文献",
-    "文档",
-    "资料",
-    "材料",
-    "数据来源",
-    "第一条",
-    "第一篇",
-    "第一份",
-    "第一个",
-    "链接",
-    "source",
-    "sources",
-    "citation",
-    "citations",
-    "reference",
-    "references",
-    "document",
-    "documents",
-    "doc",
-    "docs",
-    "url",
-    "link",
-)
-
-ARTIFACT_FOLLOW_UP_TERMS = (
-    "总结",
-    "概括",
-    "摘要",
-    "改写",
-    "重写",
-    "润色",
-    "扩写",
-    "展开",
-    "精简",
-    "翻译",
-    "表格",
-    "列表",
-    "summarize",
-    "summary",
-    "rewrite",
-    "expand",
-    "elaborate",
-    "shorten",
-    "translate",
-    "table",
-    "bullet",
-)
-
-CODING_TERMS = (
-    "力扣",
-    "leetcode",
-    "代码",
-    "写一段",
-    "写个",
-    "实现",
-    "函数",
-    "算法",
-    "debug",
-    "bug",
-    "报错",
-    "code",
-    "program",
-    "function",
-    "implement",
-)
-
-DIRECT_ANSWER_TERMS = (
-    "解释",
-    "说明",
-    "怎么理解",
-    "什么意思",
-    "什么是",
-    "区别",
-    "原理",
-    "explain",
-    "what is",
-    "how does",
-)
-
-
 async def classify_research_intent_node(state: dict[str, Any]) -> dict[str, Any]:
     """Classify whether a user turn can be answered from the latest artifact."""
     query = _normalized_query(state)
@@ -113,10 +28,8 @@ async def classify_research_intent_node(state: dict[str, Any]) -> dict[str, Any]
 
     try:
         return await _classify_intent_with_llm(query, latest_result)
-    except Exception:
-        if not latest_result:
-            return _classify_new_turn_intent_by_rules(query)
-        return _classify_follow_up_intent_by_rules(query, latest_result)
+    except Exception as exc:
+        return _fallback_intent_when_router_unavailable(exc)
 
 
 async def _classify_intent_with_llm(
@@ -146,31 +59,11 @@ async def _classify_intent_with_llm(
     }
 
 
-def _classify_follow_up_intent_by_rules(query: str, latest_result: dict[str, Any]) -> dict[str, str]:
-    if _is_coding_request(query):
-        return {"intent": "coding_help", "reason": "The request asks for code or programming help."}
-
-    if _contains_any(query, SOURCE_TERMS):
-        return {"intent": "source_question"}
-
-    if _contains_any(query, ARTIFACT_FOLLOW_UP_TERMS) and latest_result.get("report"):
-        return {"intent": "artifact_follow_up"}
-
-    return {"intent": "new_research"}
-
-
-def _classify_new_turn_intent_by_rules(query: str) -> dict[str, str]:
-    if _is_coding_request(query):
-        return {"intent": "coding_help", "reason": "The request asks for code or programming help."}
-
-    if _is_likely_direct_answer(query):
-        return {"intent": "direct_answer", "reason": "The request can be answered without source discovery."}
-
-    return {"intent": "new_research", "reason": "The request may need fresh source discovery."}
-
-
-def _is_coding_request(query: str) -> bool:
-    return _contains_any(query, CODING_TERMS)
+def _fallback_intent_when_router_unavailable(exc: Exception) -> dict[str, str]:
+    return {
+        "intent": "new_research",
+        "reason": f"Intent router unavailable; defaulting to fresh research. {exc}",
+    }
 
 
 def _build_intent_prompt() -> ChatPromptTemplate:
@@ -672,17 +565,6 @@ def _langchain_config(run_name: str, stage: str) -> dict[str, Any]:
             "stage": stage,
         },
     )
-
-
-def _contains_any(query: str, terms: tuple[str, ...]) -> bool:
-    return any(term in query for term in terms)
-
-
-def _is_likely_direct_answer(query: str) -> bool:
-    if _contains_any(query, DIRECT_ANSWER_TERMS) and not _contains_any(query, SOURCE_TERMS):
-        return True
-
-    return False
 
 
 def _document_list(latest_result: dict[str, Any]) -> list[dict[str, Any]]:

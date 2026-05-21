@@ -114,11 +114,15 @@ class ResearchStreamTests(TestCase):
             if event.startswith("event: trace")
         ]
 
-        self.assertEqual(trace_payloads[0]["kind"], "tool_call")
-        self.assertEqual(trace_payloads[0]["title"], "Search web")
-        self.assertEqual(trace_payloads[1]["kind"], "tool_result")
-        self.assertEqual(trace_payloads[1]["documents"][0]["title"], "Example Source")
-        self.assertEqual(trace_payloads[1]["documents"][0]["url"], "https://example.com/source")
+        self.assertEqual(trace_payloads[0]["kind"], "reasoning")
+        self.assertEqual(trace_payloads[0]["title"], "Route selected")
+        self.assertEqual(trace_payloads[0]["route"], "web_search")
+        self.assertIn("new_research", trace_payloads[0]["detail"])
+        self.assertEqual(trace_payloads[1]["kind"], "tool_call")
+        self.assertEqual(trace_payloads[1]["title"], "Search web")
+        self.assertEqual(trace_payloads[2]["kind"], "tool_result")
+        self.assertEqual(trace_payloads[2]["documents"][0]["title"], "Example Source")
+        self.assertEqual(trace_payloads[2]["documents"][0]["url"], "https://example.com/source")
         thinking_payloads = [
             json.loads(event.split("data: ", 1)[1])
             for event in events
@@ -187,10 +191,12 @@ class ResearchStreamTests(TestCase):
             if event.startswith("event: trace")
         ]
 
-        self.assertEqual(trace_payloads[0]["kind"], "tool_call")
-        self.assertEqual(trace_payloads[0]["tool"], "bash")
-        self.assertEqual(trace_payloads[1]["kind"], "tool_result")
-        self.assertEqual(trace_payloads[1]["result"]["content"], "ok")
+        self.assertEqual(trace_payloads[0]["title"], "Route selected")
+        self.assertEqual(trace_payloads[0]["route"], "answer_coding")
+        self.assertEqual(trace_payloads[1]["kind"], "tool_call")
+        self.assertEqual(trace_payloads[1]["tool"], "bash")
+        self.assertEqual(trace_payloads[2]["kind"], "tool_result")
+        self.assertEqual(trace_payloads[2]["result"]["content"], "ok")
 
     def test_stream_emits_llm_drafts_as_live_thinking_events(self):
         from agents import research_stream
@@ -282,7 +288,7 @@ class ResearchStreamTests(TestCase):
             ],
         )
 
-    def test_react_mode_streams_agent_messages_and_answer_result(self):
+    def test_react_mode_streams_trace_events_and_answer_result(self):
         from agents import research_stream
 
         async def fake_react_messages(query):
@@ -338,6 +344,26 @@ class ResearchStreamTests(TestCase):
         self.assertIn("event: agent_message", event_names)
         self.assertIn("event: answer", event_names)
         self.assertIn("event: complete", event_names)
+        trace_payloads = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: trace")
+        ]
+        self.assertEqual(trace_payloads[0]["title"], "Route selected")
+        self.assertEqual(trace_payloads[0]["route"], "web_search")
+        self.assertEqual(trace_payloads[1]["stage"], "react")
+        self.assertEqual(trace_payloads[1]["title"], "Run ReAct agent")
+        self.assertEqual(
+            [(payload["kind"], payload["title"]) for payload in trace_payloads[2:]],
+            [
+                ("reasoning", "Thinking"),
+                ("tool_call", "Search web"),
+                ("tool_result", "Sources found"),
+            ],
+        )
+        self.assertEqual(trace_payloads[2]["detail"], "Need a current source.")
+        self.assertEqual(trace_payloads[3]["detail"], "test query")
+        self.assertEqual(trace_payloads[4]["documents"][0]["title"], "Example Source")
 
         complete_payload = json.loads(
             [event for event in events if event.startswith("event: complete")][0].split("data: ", 1)[1]

@@ -53,6 +53,14 @@ export interface ResearchActivityStream {
   toggleLabel: 'More steps' | 'Less steps';
 }
 
+export interface ResearchActivityTimelineInput {
+  statuses: ResearchStreamStatus[];
+  thinking: ResearchStreamThinking[];
+  documents?: Document[];
+  trace?: ResearchStreamTrace[];
+  agentMessages?: AgentMessage[];
+}
+
 const DEFAULT_VISIBLE_AGENT_EVENTS = 2;
 export const PLAN_FIRST_STEP_REVEAL_DELAY_MS = 120;
 export const PLAN_STEP_REVEAL_INTERVAL_MS = 520;
@@ -281,6 +289,15 @@ export function buildResearchActivityFromAgentMessages(messages: AgentMessage[])
   return events;
 }
 
+export function buildResearchActivityTimeline({
+  statuses,
+  thinking,
+  documents = [],
+  trace = [],
+}: ResearchActivityTimelineInput): ResearchActivityEvent[] {
+  return buildResearchActivity(statuses, thinking, documents, trace);
+}
+
 export function buildResearchActivity(
   statuses: ResearchStreamStatus[],
   thinking: ResearchStreamThinking[],
@@ -310,7 +327,15 @@ export function buildResearchActivity(
       if (stageIndex >= 0) {
         events.splice(stageIndex + 1, 0, thinkingEvent);
       } else {
-        events.push(thinkingEvent);
+        const nextStageIndex = events.findIndex((event) => (
+          executionStageRank(event.stage) > executionStageRank(message.stage)
+        ));
+
+        if (nextStageIndex >= 0) {
+          events.splice(nextStageIndex, 0, thinkingEvent);
+        } else {
+          events.push(thinkingEvent);
+        }
       }
     });
 
@@ -481,4 +506,18 @@ export function buildResearchActivityStream(
     hiddenCount: hiddenEvents.length,
     toggleLabel: showOlderSteps ? 'Less steps' : 'More steps',
   };
+}
+
+function executionStageRank(stage: ResearchActivityEvent['stage']) {
+  const ranks: Record<string, number> = {
+    route: 0,
+    react: 1,
+    answer: 2,
+    coding: 2,
+    search: 3,
+    analyze: 4,
+    report: 5,
+  };
+
+  return ranks[stage] ?? 99;
 }

@@ -239,6 +239,10 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
             SimpleNamespace(content="print('ok')\n```", additional_kwargs={}),
         ]
         with (
+            patch(
+                "agents.research_stream.classify_research_intent_node",
+                return_value={"intent": "coding_help", "reason": "test route"},
+            ),
             patch.object(conversation_router.ChatPromptTemplate, "from_messages", return_value=_FakePrompt()),
             patch.object(conversation_router, "ChatOpenAI"),
             patch("agents.research_stream.web_search_node", side_effect=AssertionError("should not search")),
@@ -307,6 +311,32 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
         self.assertEqual(routed_state["intent"], "new_research")
         self.assertEqual(conversation_router.route_research_intent(routed_state), "web_search")
 
+    async def test_router_llm_failure_does_not_guess_artifact_follow_up_from_keywords(self):
+        from agents.nodes import conversation_router
+
+        with patch.object(conversation_router, "ChatOpenAI", side_effect=RuntimeError("router unavailable")):
+            routed_state = await conversation_router.classify_research_intent_node({
+                "query": "总结一下",
+                "display_query": "总结一下",
+                "latest_result": LATEST_RESULT,
+            })
+
+        self.assertEqual(routed_state["intent"], "new_research")
+        self.assertIn("router unavailable", routed_state["reason"])
+
+    async def test_router_llm_failure_does_not_guess_coding_from_keywords(self):
+        from agents.nodes import conversation_router
+
+        with patch.object(conversation_router, "ChatOpenAI", side_effect=RuntimeError("router unavailable")):
+            routed_state = await conversation_router.classify_research_intent_node({
+                "query": "帮我写一段力扣代码",
+                "display_query": "帮我写一段力扣代码",
+                "latest_result": None,
+            })
+
+        self.assertEqual(routed_state["intent"], "new_research")
+        self.assertIn("router unavailable", routed_state["reason"])
+
 
 class FollowUpResearchRouteTests(TestCase):
     def test_execute_research_passes_latest_result_to_agent_state(self):
@@ -343,9 +373,24 @@ class FollowUpResearchRouteTests(TestCase):
         self.assertIn("https://example.com/report", result["answer"])
 
     def test_coding_request_plan_is_skipped(self):
-        from agents.nodes.plan import assess_research_plan_need
+        from agents.nodes import plan
 
-        result = asyncio.run(assess_research_plan_need("帮我写一段力扣代码"))
+        class FakeResponse:
+            content = '{"should_plan": false, "reason": "Direct coding request."}'
+
+        class FakeChain:
+            async def ainvoke(self, payload):
+                return FakeResponse()
+
+        class FakePrompt:
+            def __or__(self, llm):
+                return FakeChain()
+
+        with (
+            patch.object(plan.ChatPromptTemplate, "from_messages", return_value=FakePrompt()),
+            patch.object(plan, "ChatOpenAI"),
+        ):
+            result = asyncio.run(plan.assess_research_plan_need("帮我写一段力扣代码"))
 
         self.assertFalse(result["should_plan"])
         self.assertIn("coding", result["reason"])
