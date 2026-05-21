@@ -97,3 +97,49 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
         self.assertEqual(events[1]["message"]["name"], "ask_clarification")
         self.assertIn("你是想问 hasokan", events[1]["message"]["content"])
         self.assertEqual(events[2]["question"], "你是想问 hasokan，还是 hasmokan？")
+
+    async def test_injects_skill_content_into_system_prompt(self):
+        from agents.react_agent import stream_react_agent_messages
+        from agents.skills import AgentSkill
+
+        captured_system_prompts = []
+
+        class FakeModel:
+            async def ainvoke(self, messages, config=None):
+                captured_system_prompts.append(messages[0].content)
+                return SimpleNamespace(
+                    id="ai-final",
+                    content="Use source-backed identity checks.",
+                    additional_kwargs={},
+                    tool_calls=[],
+                )
+
+        events = [
+            event
+            async for event in stream_react_agent_messages(
+                "谁是 hasmokan",
+                model=FakeModel(),
+                skills=[
+                    AgentSkill(
+                        name="identity-research",
+                        description="Identity research guidance.",
+                        content="Prefer source-backed identity checks before answering.",
+                        allowed_tools=["web_search"],
+                    )
+                ],
+            )
+        ]
+
+        self.assertEqual(events[-1]["answer"], "Use source-backed identity checks.")
+        self.assertIn("identity-research", captured_system_prompts[0])
+        self.assertIn("Prefer source-backed identity checks", captured_system_prompts[0])
+
+    def test_filters_react_tools_with_skill_allowed_tools(self):
+        from agents.react_agent import available_react_tools_for_skills
+        from agents.skills import AgentSkill
+
+        tools = available_react_tools_for_skills(
+            [AgentSkill(name="search-only", content="", allowed_tools=["web_search"])]
+        )
+
+        self.assertEqual([tool.name for tool in tools], ["web_search"])

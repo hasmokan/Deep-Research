@@ -17,6 +17,12 @@ from langchain_openai import ChatOpenAI
 
 from agents.nodes.reasoning import extract_response_parts
 from agents.nodes.web_search import web_search_node
+from agents.skills import (
+    AgentSkill,
+    filter_tools_by_skill_allowed_tools,
+    format_skills_for_prompt,
+    load_enabled_skills,
+)
 from core.config import get_settings
 from services.langfuse_observability import get_langfuse_tracer
 
@@ -39,13 +45,15 @@ async def stream_react_agent_messages(
     *,
     model: Any | None = None,
     tool_runner: ToolRunner | None = None,
+    skills: list[AgentSkill] | None = None,
     max_rounds: int = 4,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a minimal ReAct exchange as serializable message events."""
-    runnable_model = model or _build_model()
+    active_skills = load_enabled_skills() if skills is None else list(skills)
+    runnable_model = model or _build_model(active_skills)
     runner = tool_runner or _run_builtin_tool
     messages: list[Any] = [
-        SystemMessage(content=REACT_SYSTEM_PROMPT),
+        SystemMessage(content=build_react_system_prompt(active_skills)),
         HumanMessage(content=query),
     ]
 
@@ -98,7 +106,14 @@ async def stream_react_agent_messages(
     yield {"type": "final", "answer": answer}
 
 
-def _build_model() -> Any:
+def build_react_system_prompt(skills: list[AgentSkill] | None = None) -> str:
+    skill_prompt = format_skills_for_prompt(skills or [])
+    if not skill_prompt:
+        return REACT_SYSTEM_PROMPT
+    return f"{REACT_SYSTEM_PROMPT.rstrip()}\n\n{skill_prompt}\n"
+
+
+def _build_model(skills: list[AgentSkill] | None = None) -> Any:
     llm = ChatOpenAI(
         model=settings.llm_model,
         temperature=0.2,
@@ -106,7 +121,7 @@ def _build_model() -> Any:
         base_url=settings.openai_base_url,
         extra_body={"reasoning_split": True},
     )
-    return llm.bind_tools([web_search_tool, ask_clarification_tool])
+    return llm.bind_tools(available_react_tools_for_skills(skills or []))
 
 
 @tool("web_search", parse_docstring=True)
@@ -129,6 +144,10 @@ def ask_clarification_tool(question: str, options: list[str] | None = None) -> s
         options: Optional short choices for the user.
     """
     return _format_clarification({"question": question, "options": options or []})
+
+
+def available_react_tools_for_skills(skills: list[AgentSkill] | None = None) -> list[Any]:
+    return filter_tools_by_skill_allowed_tools([web_search_tool, ask_clarification_tool], skills or [])
 
 
 async def _run_builtin_tool(name: str, args: dict[str, Any]) -> Any:
@@ -238,4 +257,3 @@ def _langchain_config(run_name: str, stage: str) -> dict[str, Any]:
             "stage": stage,
         },
     )
-

@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     # API configuration
     frontend_url: str = "http://localhost:3000"
     research_storage_backend: str = "json"
+    agent_skills_dir: Optional[str] = None
+    agent_enabled_skills: str = ""
 
     # Langfuse observability
     langfuse_enabled: bool = False
