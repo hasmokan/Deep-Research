@@ -7,6 +7,7 @@ import inspect
 import json
 from typing import Any, AsyncIterator
 
+from agents.react_agent import stream_react_agent_messages
 from agents.nodes.analyze import stream_analyze_node
 from agents.nodes.conversation_router import (
     answer_from_artifact_node,
@@ -85,6 +86,7 @@ async def stream_research_events(
     display_query: str | None = None,
     store: Any | None = None,
     latest_result: dict[str, Any] | None = None,
+    execution_mode: str = "auto",
     on_complete: Any | None = None,
 ) -> AsyncIterator[str]:
     """Run research and emit progress/result events as SSE strings."""
@@ -234,6 +236,63 @@ async def stream_research_events(
                     })
                 yield record_event("answer", {"answer": state.get("answer")})
                 await asyncio.sleep(0)
+                result_payload = _result_payload(state)
+                run_observation.update(output=_result_observability_summary(result_payload))
+                yield await complete_event(result_payload)
+                return
+
+            if execution_mode == "react" and route in {"answer_direct", "web_search"}:
+                yield record_event(
+                    "status",
+                    {
+                        "stage": "react",
+                        "label": "Reasoning",
+                        "message": "Running a ReAct agent with tools.",
+                    },
+                )
+                await asyncio.sleep(0)
+                with tracer.start(
+                    "react-agent",
+                    as_type="agent",
+                    input={"query": visible_query, "route": route},
+                    metadata={"run_id": run_id},
+                ) as react_observation:
+                    emitted_answer = False
+                    async for react_event in stream_react_agent_messages(query):
+                        event_type = react_event.get("type")
+                        if event_type == "agent_message":
+                            message = react_event.get("message") if isinstance(react_event.get("message"), dict) else {}
+                            yield record_event("agent_message", message)
+                            _merge_react_documents(state, message)
+                            await asyncio.sleep(0)
+                        elif event_type == "clarification":
+                            question = str(react_event.get("question") or react_event.get("message") or "").strip()
+                            state.update(
+                                {
+                                    "answer": question,
+                                    "result_type": "answer",
+                                    "report_completed": True,
+                                }
+                            )
+                            yield record_event("answer", {"answer": state.get("answer")})
+                            emitted_answer = True
+                            await asyncio.sleep(0)
+                            break
+                        elif event_type == "final":
+                            state.update(
+                                {
+                                    "answer": str(react_event.get("answer") or "").strip(),
+                                    "result_type": "answer",
+                                    "report_completed": True,
+                                }
+                            )
+                    react_observation.update(output={
+                        "answer_preview": _text_preview(state.get("answer")),
+                        "documents": _documents_observability_items(state.get("documents", [])),
+                    })
+                if state.get("answer") is not None and not emitted_answer:
+                    yield record_event("answer", {"answer": state.get("answer")})
+                    await asyncio.sleep(0)
                 result_payload = _result_payload(state)
                 run_observation.update(output=_result_observability_summary(result_payload))
                 yield await complete_event(result_payload)
@@ -601,6 +660,54 @@ def _agent_tool_content(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False)
+
+
+def _merge_react_documents(state: dict[str, Any], message: dict[str, Any]) -> None:
+    if message.get("type") != "tool" or message.get("name") != "web_search":
+        return
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        return
+
+    try:
+        items = json.loads(content)
+    except json.JSONDecodeError:
+        return
+
+    if not isinstance(items, list):
+        return
+
+    existing = state.setdefault("documents", [])
+    existing_urls = {
+        ((document.get("metadata") or {}).get("url"))
+        for document in existing
+        if isinstance(document, dict) and isinstance(document.get("metadata"), dict)
+    }
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("url") or "Untitled source").strip()
+        url = str(item.get("url") or "").strip()
+        if url and url in existing_urls:
+            continue
+        existing.append(
+            {
+                "id": f"react_{len(existing)}",
+                "content": title,
+                "metadata": {
+                    "title": title,
+                    "url": url or None,
+                    "source": item.get("source"),
+                    "provider": "react",
+                    "type": "web_search",
+                },
+                "similarity": None,
+            }
+        )
+        if url:
+            existing_urls.add(url)
 
 
 def _documents_observability_items(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -4,6 +4,7 @@
 
 export interface ResearchRequest {
   query: string;
+  execution_mode?: 'auto' | 'react' | 'report';
   thread_id?: string;
   messages?: ResearchRequestMessage[];
   latest_result?: ResearchResult | null;

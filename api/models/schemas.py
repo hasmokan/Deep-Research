@@ -9,6 +9,10 @@ class ConversationMessage(BaseModel):
 
 class ResearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500, description="Research query")
+    execution_mode: Literal["auto", "react", "report"] = Field(
+        default="auto",
+        description="Execution style requested by the client",
+    )
     thread_id: Optional[str] = Field(
         default=None,
         description="Browser-local conversation identifier used for run context",
@@ -26,6 +30,7 @@ class ResearchRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "query": "Latest trends in artificial intelligence research",
+                "execution_mode": "auto",
                 "thread_id": None,
                 "messages": [],
                 "latest_result": None,

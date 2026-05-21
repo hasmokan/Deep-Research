@@ -42,6 +42,7 @@ export interface ResearchActivityEvent {
   kind: 'status' | 'thinking' | 'sources' | ResearchStreamTrace['kind'];
   title: string;
   detail: string;
+  tool?: string;
   documents?: Array<Document | ResearchStreamTraceDocument>;
 }
 

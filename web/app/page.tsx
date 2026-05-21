@@ -698,6 +698,7 @@ export default function Home() {
       const researchResult = await apiClient.streamResearch(
         {
             query: researchQuery,
+            execution_mode: options.skipPlan ? 'react' : activePlan ? 'report' : 'auto',
             thread_id: runSessionId,
             messages: history,
             latest_result: latestResultForFollowUp,

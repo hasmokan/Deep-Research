@@ -159,6 +159,7 @@ async def _run_research_to_store(
     user_id: str,
     display_query: str | None = None,
     latest_result: dict | None = None,
+    execution_mode: str = "auto",
 ) -> None:
     try:
         async for _event in stream_research_events(
@@ -167,6 +168,7 @@ async def _run_research_to_store(
             display_query=display_query,
             store=research_run_store,
             latest_result=latest_result,
+            execution_mode=execution_mode,
             on_complete=lambda result: _remember_result(user_id, result),
         ):
             pass
@@ -188,6 +190,7 @@ def start_research_run_background(
     user_id: str,
     display_query: str | None = None,
     latest_result: dict | None = None,
+    execution_mode: str = "auto",
 ) -> asyncio.Task:
     task = asyncio.create_task(
         _run_research_to_store(
@@ -196,6 +199,7 @@ def start_research_run_background(
             user_id=user_id,
             display_query=display_query,
             latest_result=latest_result,
+            execution_mode=execution_mode,
         )
     )
     _background_research_tasks.add(task)
@@ -280,6 +284,7 @@ async def stream_research_post(
         user_id=user_id,
         display_query=request.query,
         latest_result=request.latest_result,
+        execution_mode=request.execution_mode,
     )
 
     return StreamingResponse(

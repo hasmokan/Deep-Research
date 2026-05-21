@@ -282,6 +282,70 @@ class ResearchStreamTests(TestCase):
             ],
         )
 
+    def test_react_mode_streams_agent_messages_and_answer_result(self):
+        from agents import research_stream
+
+        async def fake_react_messages(query):
+            yield {
+                "type": "agent_message",
+                "message": {
+                    "type": "ai",
+                    "id": "ai-1",
+                    "content": "",
+                    "reasoning_content": "Need a current source.",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "name": "web_search",
+                            "args": {"query": query},
+                        }
+                    ],
+                },
+            }
+            yield {
+                "type": "agent_message",
+                "message": {
+                    "type": "tool",
+                    "id": "tool-call-1",
+                    "tool_call_id": "call-1",
+                    "name": "web_search",
+                    "content": '[{"title":"Example Source","url":"https://example.com"}]',
+                },
+            }
+            yield {
+                "type": "final",
+                "answer": "Here is the sourced answer.",
+            }
+
+        with (
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                return_value={"intent": "new_research", "reason": "test"},
+            ),
+            patch.object(research_stream, "stream_react_agent_messages", fake_react_messages),
+        ):
+            events = asyncio.run(
+                _collect_stream_events(
+                    research_stream.stream_research_events(
+                        "test query",
+                        execution_mode="react",
+                    )
+                )
+            )
+
+        event_names = [event.split("\n", 1)[0] for event in events]
+        self.assertIn("event: agent_message", event_names)
+        self.assertIn("event: answer", event_names)
+        self.assertIn("event: complete", event_names)
+
+        complete_payload = json.loads(
+            [event for event in events if event.startswith("event: complete")][0].split("data: ", 1)[1]
+        )
+        self.assertEqual(complete_payload["answer"], "Here is the sourced answer.")
+        self.assertEqual(complete_payload["result_type"], "answer")
+        self.assertEqual(complete_payload["status"], "completed")
+
     def test_stream_route_returns_text_event_stream(self):
         from agents.research_stream import format_sse_event
         from routers import research
