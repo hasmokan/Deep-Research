@@ -357,8 +357,19 @@ export function LoadingState({ activity }: LoadingStateProps = {}) {
       </div>
 
       {activity?.query && (
-        <div className="mx-4 mb-1 truncate border-l border-border/80 pl-3 text-xs text-muted-foreground">
-          Query: {activity.query}
+        <div className="px-3 pb-1">
+          <div className="relative -mx-1 flex gap-2.5 rounded-[8px] bg-muted/35 px-1 py-1.5">
+            <div className="relative flex w-5 shrink-0 justify-center pt-0.5">
+              <div className="relative z-10 flex h-5 w-5 items-center justify-center rounded-[6px] border border-border/80 bg-background text-muted-foreground">
+                <MessageCircle className="h-3 w-3" />
+              </div>
+            </div>
+            <p className="min-w-0 flex-1 truncate text-xs leading-5 text-muted-foreground">
+              <span className="font-medium text-foreground/75">Query</span>
+              <span className="text-muted-foreground/70">: </span>
+              {activity.query}
+            </p>
+          </div>
         </div>
       )}
 
