@@ -10,6 +10,7 @@ from agents.nodes.conversation_router import (
     classify_research_intent_node,
     route_research_intent,
 )
+from agents.nodes.query_resolution import resolve_research_query_node
 from agents.nodes.web_search import web_search_node
 from agents.nodes.analyze import analyze_node
 from agents.nodes.generate import generate_node
@@ -25,6 +26,9 @@ class ResearchState(TypedDict):
     report: Optional[str]
     report_thinking: Optional[str]
     latest_result: Optional[Dict[str, Any]]
+    resolved_query: Optional[str]
+    search_query: Optional[str]
+    context_resolution: Optional[Dict[str, Any]]
     intent: Optional[str]
     answer: Optional[str]
     result_type: Optional[str]
@@ -74,6 +78,7 @@ def build_research_graph() -> Any:
     graph = StateGraph(ResearchState)
 
     # Add nodes
+    graph.add_node("resolve_query", resolve_research_query_node)
     graph.add_node("classify_intent", classify_research_intent_node)
     graph.add_node("answer_sources", answer_sources_node)
     graph.add_node("answer_from_artifact", answer_from_artifact_node)
@@ -83,7 +88,8 @@ def build_research_graph() -> Any:
     graph.add_node("analyze", analyze_node)
     graph.add_node("generate", generate_node)
 
-    graph.set_entry_point("classify_intent")
+    graph.set_entry_point("resolve_query")
+    graph.add_edge("resolve_query", "classify_intent")
 
     # Add conditional edges
     graph.add_conditional_edges(

@@ -143,6 +143,73 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(agent_messages[1]["tool_call_id"], agent_messages[0]["tool_calls"][0]["id"])
         self.assertIn("Example Source", agent_messages[1]["content"])
 
+    def test_stream_resolves_follow_up_before_routing_and_search(self):
+        from agents import research_stream
+
+        classifier_states = []
+        search_states = []
+
+        async def fake_resolve_node(state):
+            return {
+                "resolved_query": "What is hasmokan's Codeforces rating?",
+                "search_query": "hasmokan Codeforces rating",
+                "context_resolution": {
+                    "used_context": True,
+                    "reason": "Resolved '他' from previous conversation context.",
+                },
+            }
+
+        async def fake_classify_node(state):
+            classifier_states.append(dict(state))
+            return {"intent": "new_research", "reason": "needs current profile lookup"}
+
+        async def fake_web_search_node(state):
+            search_states.append(dict(state))
+            return {
+                "documents": [],
+                "web_search_completed": True,
+            }
+
+        contextual_query = (
+            "Use the previous conversation context only when it is necessary.\n\n"
+            "Previous conversation context:\n"
+            "user: 谁是hasmokan\n"
+            "assistant: hasmokan 是一个 GitHub 用户。\n\n"
+            "Current user request:\n"
+            "所以他在 codeforce 上多少分"
+        )
+
+        with (
+            patch.object(research_stream, "resolve_research_query_node", fake_resolve_node, create=True),
+            patch.object(research_stream, "classify_research_intent_node", fake_classify_node),
+            patch.object(research_stream, "web_search_node", fake_web_search_node),
+        ):
+            events = asyncio.run(
+                _collect_stream_events(
+                    research_stream.stream_research_events(
+                        contextual_query,
+                        display_query="所以他在 codeforce 上多少分",
+                    )
+                )
+            )
+
+        self.assertEqual(classifier_states[-1]["resolved_query"], "What is hasmokan's Codeforces rating?")
+        self.assertEqual(search_states[-1]["search_query"], "hasmokan Codeforces rating")
+
+        agent_messages = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: agent_message")
+        ]
+        search_trace = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: trace") and '"title":"Search web"' in event
+        ][0]
+
+        self.assertEqual(agent_messages[0]["tool_calls"][0]["args"]["query"], "hasmokan Codeforces rating")
+        self.assertEqual(search_trace["query"], "hasmokan Codeforces rating")
+
     def test_coding_stream_forwards_sandbox_trace_events(self):
         from agents import research_stream
 

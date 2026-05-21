@@ -50,3 +50,29 @@ class WebSearchNodeTests(TestCase):
             }))
 
         self.assertEqual(seen_queries, ["青橘单车的市场占有率"])
+
+    def test_web_search_node_uses_search_query_when_resolved(self):
+        from agents.nodes import web_search
+
+        seen_queries = []
+
+        class FakeSearchTool:
+            async def search(self, query, max_results=10):
+                seen_queries.append(query)
+                return []
+
+        with patch.object(web_search, "WebSearchTool", return_value=FakeSearchTool()):
+            asyncio.run(web_search.web_search_node({
+                "query": (
+                    "Use the previous conversation context to resolve references.\n\n"
+                    "Previous conversation context:\n"
+                    "user: 谁是hasmokan\n"
+                    "Current user request:\n"
+                    "所以他在 codeforce 上多少分"
+                ),
+                "display_query": "所以他在 codeforce 上多少分",
+                "resolved_query": "hasmokan Codeforces profile rating",
+                "search_query": "hasmokan Codeforces rating",
+            }))
+
+        self.assertEqual(seen_queries, ["hasmokan Codeforces rating"])

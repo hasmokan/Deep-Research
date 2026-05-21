@@ -21,11 +21,14 @@ class _FakePrompt:
 class _FakeChain:
     response = SimpleNamespace(content="ok", additional_kwargs={})
     stream_chunks = []
+    seen_payloads = []
 
     async def ainvoke(self, payload):
+        self.seen_payloads.append(payload)
         return self.response
 
     async def astream(self, payload):
+        self.seen_payloads.append(payload)
         for chunk in self.stream_chunks:
             yield chunk
 
@@ -71,6 +74,7 @@ class LlmNodeModelTests(TestCase):
     def setUp(self):
         _FakeChain.response = SimpleNamespace(content="ok", additional_kwargs={})
         _FakeChain.stream_chunks = []
+        _FakeChain.seen_payloads = []
 
     def test_analyze_node_uses_configured_llm_model(self):
         from agents.nodes import analyze
@@ -132,6 +136,25 @@ class LlmNodeModelTests(TestCase):
 
         self.assertEqual(result["analysis"], "analysis answer")
         self.assertEqual(result["analysis_thinking"], "analysis thinking")
+
+    def test_analyze_node_uses_resolved_query_when_available(self):
+        from agents.nodes import analyze
+
+        with (
+            patch.object(analyze.ChatPromptTemplate, "from_messages", return_value=_FakePrompt()),
+            patch.object(analyze, "ChatOpenAI"),
+        ):
+            asyncio.run(
+                analyze.analyze_node(
+                    {
+                        "query": "Previous conversation context: user: 谁是hasmokan",
+                        "resolved_query": "hasmokan Codeforces rating",
+                        "documents": [{"content": "test document", "similarity": 0.99}],
+                    }
+                )
+            )
+
+        self.assertEqual(_FakeChain.seen_payloads[-1]["query"], "hasmokan Codeforces rating")
 
     def test_stream_analyze_node_yields_reasoning_content_deltas(self):
         from agents.nodes import analyze
@@ -256,6 +279,27 @@ class LlmNodeModelTests(TestCase):
 
         self.assertEqual(result["report"], "# Final Report")
         self.assertEqual(result["report_thinking"], "report thinking")
+
+    def test_generate_node_uses_resolved_query_when_available(self):
+        from agents.nodes import generate
+
+        with (
+            patch.object(generate.ChatPromptTemplate, "from_messages", return_value=_FakePrompt()),
+            patch.object(generate, "ChatOpenAI"),
+        ):
+            asyncio.run(
+                generate.generate_node(
+                    {
+                        "query": "Previous conversation context: user: 谁是hasmokan",
+                        "display_query": "所以他在 codeforce 上多少分",
+                        "resolved_query": "hasmokan Codeforces rating",
+                        "documents": [{"content": "test document"}],
+                        "analysis": "test analysis",
+                    }
+                )
+            )
+
+        self.assertEqual(_FakeChain.seen_payloads[-1]["query"], "hasmokan Codeforces rating")
 
     def test_stream_generate_node_yields_reasoning_content_deltas(self):
         from agents.nodes import generate

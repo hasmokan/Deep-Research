@@ -21,7 +21,7 @@ async def generate_node(state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Updated state with 'report' field
     """
-    query = state["query"]
+    query = _report_query(state)
     display_query = state.get("display_query") or query
     analysis = state.get("analysis", "")
     documents_count = len(state.get("documents", []))
@@ -48,7 +48,7 @@ async def generate_node(state: dict[str, Any]) -> dict[str, Any]:
 
 async def stream_generate_node(state: dict[str, Any]):
     """Stream report-writing reasoning deltas and yield the final report state."""
-    query = state["query"]
+    query = _report_query(state)
     display_query = state.get("display_query") or query
     analysis = state.get("analysis", "")
     documents_count = len(state.get("documents", []))
@@ -167,6 +167,10 @@ def _build_generate_payload(
         "analysis": analysis,
         "documents_count": documents_count,
     }
+
+
+def _report_query(state: dict[str, Any]) -> str:
+    return str(state.get("resolved_query") or state.get("query") or state.get("display_query") or "").strip()
 
 
 def _langchain_config(run_name: str, documents_count: int) -> dict[str, Any]:

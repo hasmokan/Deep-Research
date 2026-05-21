@@ -250,7 +250,7 @@ async def _answer_directly_with_llm(
     chain = prompt | llm
     response = await ainvoke_langchain(
         chain,
-        {"query": state.get("display_query") or state.get("query") or ""},
+        {"query": _resolved_query(state)},
         _langchain_config("direct-answer-llm", "answer"),
     )
     answer, thinking = extract_response_parts(response)
@@ -283,7 +283,7 @@ async def _stream_direct_answer_with_llm(
 
     stream = astream_langchain(
         chain,
-        {"query": state.get("display_query") or state.get("query") or ""},
+        {"query": _resolved_query(state)},
         _langchain_config("direct-answer-llm", "answer"),
     )
     async for chunk in stream:
@@ -351,7 +351,7 @@ async def _stream_sandbox_coding_with_tools(state: dict[str, Any]):
         extra_body={"reasoning_split": True},
     )
     model_with_tools = llm.bind_tools(sandbox_openai_tool_specs())
-    query = state.get("display_query") or state.get("query") or ""
+    query = _resolved_query(state)
     messages: list[Any] = [
         SystemMessage(content=_SANDBOX_CODING_PROMPT),
         HumanMessage(content=str(query)),
@@ -500,7 +500,7 @@ async def answer_from_artifact_node(state: dict[str, Any]) -> dict[str, Any]:
     """Answer lightweight report follow-ups from the latest generated report."""
     latest_result = state.get("latest_result") or {}
     report = latest_result.get("report") or latest_result.get("analysis")
-    visible_query = state.get("display_query") or state.get("query") or "这个问题"
+    visible_query = _resolved_query(state) or state.get("display_query") or "这个问题"
     thinking = None
 
     if not report:
@@ -553,8 +553,12 @@ Answer the follow-up directly."""),
 
 
 def _normalized_query(state: dict[str, Any]) -> str:
-    query = state.get("display_query") or state.get("query") or ""
+    query = _resolved_query(state)
     return str(query).strip().lower()
+
+
+def _resolved_query(state: dict[str, Any]) -> str:
+    return str(state.get("resolved_query") or state.get("query") or state.get("display_query") or "").strip()
 
 
 def _langchain_config(run_name: str, stage: str) -> dict[str, Any]:

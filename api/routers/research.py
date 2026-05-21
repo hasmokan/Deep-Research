@@ -7,6 +7,7 @@ from agents.research_agent import research_agent
 from agents.research_stream import stream_research_events
 from agents.conversation_context import build_contextual_research_query
 from agents.nodes.plan import assess_research_plan_need, generate_research_plan
+from agents.nodes.query_resolution import resolve_research_query_node
 from services.auth import AuthenticatedUser, get_current_user
 from services.research_memories import build_memory_context, research_memory_store
 from services.research_runs import research_run_store
@@ -62,7 +63,11 @@ async def create_research_plan(
             request.messages,
             memory_context=_memory_context_for_user(_user_id(current_user)),
         )
-        plan = await generate_research_plan(contextual_query)
+        resolved = await resolve_research_query_node({
+            "query": contextual_query,
+            "display_query": request.query,
+        })
+        plan = await generate_research_plan(resolved.get("resolved_query") or contextual_query)
         plan["query"] = request.query
         return plan
     except Exception as e:
@@ -119,7 +124,11 @@ async def stream_research_plan(
                 request.messages,
                 memory_context=_memory_context_for_user(_user_id(current_user)),
             )
-            plan = await generate_research_plan(contextual_query)
+            resolved = await resolve_research_query_node({
+                "query": contextual_query,
+                "display_query": request.query,
+            })
+            plan = await generate_research_plan(resolved.get("resolved_query") or contextual_query)
             payload = {**plan, "query": request.query, "should_plan": True}
 
             yield _format_sse_event("plan", payload)
@@ -427,6 +436,9 @@ async def create_research(
             "report": None,
             "report_thinking": None,
             "latest_result": request.latest_result,
+            "resolved_query": None,
+            "search_query": None,
+            "context_resolution": None,
             "intent": None,
             "answer": None,
             "result_type": "report",
@@ -484,6 +496,9 @@ async def execute_research(
             "report": None,
             "report_thinking": None,
             "latest_result": request.latest_result,
+            "resolved_query": None,
+            "search_query": None,
+            "context_resolution": None,
             "intent": None,
             "answer": None,
             "result_type": "report",

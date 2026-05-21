@@ -37,8 +37,10 @@ class _FakePrompt:
 class _FakeChain:
     response = SimpleNamespace(content="ok", additional_kwargs={})
     chunks = None
+    seen_payloads = []
 
     async def ainvoke(self, payload):
+        self.seen_payloads.append(payload)
         return self.response
 
     async def astream(self, payload):
@@ -53,6 +55,7 @@ def _fake_intent_response(intent: str):
         additional_kwargs={},
     )
     _FakeChain.chunks = None
+    _FakeChain.seen_payloads = []
 
 
 async def _classify_with_fake_llm(conversation_router, state, intent: str):
@@ -311,6 +314,48 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
         self.assertEqual(routed_state["intent"], "new_research")
         self.assertEqual(conversation_router.route_research_intent(routed_state), "web_search")
 
+    async def test_router_uses_resolved_query_before_display_query(self):
+        from agents.nodes import conversation_router
+
+        state = {
+            "query": (
+                "Use the previous conversation context only when it is necessary.\n\n"
+                "Previous conversation context:\n"
+                "user: 谁是hasmokan\n"
+                "assistant: hasmokan 是一个 GitHub 用户。\n\n"
+                "Current user request:\n"
+                "所以他在 codeforce 上多少分"
+            ),
+            "display_query": "所以他在 codeforce 上多少分",
+            "resolved_query": "hasmokan Codeforces profile rating",
+            "latest_result": None,
+        }
+
+        await _classify_with_fake_llm(conversation_router, state, "new_research")
+
+        self.assertEqual(_FakeChain.seen_payloads[-1]["query"], "hasmokan codeforces profile rating")
+
+    async def test_direct_answer_uses_resolved_query_before_display_query(self):
+        from agents.nodes import conversation_router
+
+        _FakeChain.response = SimpleNamespace(content="hasmokan 的分数需要实时查询。", additional_kwargs={})
+        _FakeChain.seen_payloads = []
+
+        state = {
+            "query": "Previous conversation context: user: 谁是hasmokan\n\nCurrent user request:\n他是谁",
+            "display_query": "他是谁",
+            "resolved_query": "hasmokan 是谁？",
+            "latest_result": None,
+        }
+
+        with (
+            patch.object(conversation_router.ChatPromptTemplate, "from_messages", return_value=_FakePrompt()),
+            patch.object(conversation_router, "ChatOpenAI"),
+        ):
+            await conversation_router.answer_direct_node(state)
+
+        self.assertEqual(_FakeChain.seen_payloads[-1]["query"], "hasmokan 是谁？")
+
     async def test_router_llm_failure_does_not_guess_artifact_follow_up_from_keywords(self):
         from agents.nodes import conversation_router
 
@@ -339,6 +384,61 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
 
 
 class FollowUpResearchRouteTests(TestCase):
+    def test_research_graph_resolves_follow_up_before_routing(self):
+        from agents import research_agent
+
+        classifier_states = []
+
+        async def fake_resolve_node(state):
+            return {
+                "resolved_query": "What is hasmokan's Codeforces rating?",
+                "search_query": "hasmokan Codeforces rating",
+                "context_resolution": {
+                    "used_context": True,
+                    "reason": "Resolved from prior turn.",
+                },
+            }
+
+        async def fake_classify_node(state):
+            classifier_states.append(dict(state))
+            return {"intent": "new_research", "reason": "needs search"}
+
+        async def fake_web_search_node(state):
+            return {"documents": [], "web_search_completed": True}
+
+        initial_state = {
+            "query": (
+                "Use the previous conversation context only when it is necessary.\n\n"
+                "Previous conversation context:\n"
+                "user: 谁是hasmokan\n\n"
+                "Current user request:\n"
+                "所以他在 codeforce 上多少分"
+            ),
+            "display_query": "所以他在 codeforce 上多少分",
+            "documents": [],
+            "analysis": None,
+            "analysis_thinking": None,
+            "report": None,
+            "report_thinking": None,
+            "latest_result": None,
+            "intent": None,
+            "answer": None,
+            "result_type": "report",
+            "web_search_completed": False,
+            "analysis_completed": False,
+            "report_completed": False,
+        }
+
+        with (
+            patch.object(research_agent, "resolve_research_query_node", fake_resolve_node, create=True),
+            patch.object(research_agent, "classify_research_intent_node", fake_classify_node),
+            patch.object(research_agent, "web_search_node", fake_web_search_node),
+        ):
+            graph = research_agent.build_research_graph()
+            asyncio.run(graph.ainvoke(initial_state))
+
+        self.assertEqual(classifier_states[-1]["resolved_query"], "What is hasmokan's Codeforces rating?")
+
     def test_execute_research_passes_latest_result_to_agent_state(self):
         from routers import research
         from services.auth import AuthenticatedUser

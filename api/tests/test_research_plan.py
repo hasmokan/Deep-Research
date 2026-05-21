@@ -71,6 +71,57 @@ class ResearchPlanRouteTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {**generated_plan, "should_plan": True})
 
+    def test_plan_endpoint_uses_resolved_query_for_contextual_plan(self):
+        client = TestClient(app)
+        generated_plan = {
+            "query": "hasmokan Codeforces profile and rating history",
+            "source_label": "Public web",
+            "summary": "Research hasmokan's Codeforces profile and rating history.",
+            "steps": [],
+        }
+
+        async def fake_resolve_query_node(state):
+            self.assertIn("Previous conversation context:", state["query"])
+            self.assertEqual(state["display_query"], "顺便看看他的比赛历史")
+            return {
+                "resolved_query": "hasmokan Codeforces profile and rating history",
+                "search_query": "hasmokan Codeforces rating history",
+                "context_resolution": {"used_context": True, "reason": "Resolved pronoun."},
+            }
+
+        async def fake_generate_research_plan(query: str):
+            self.assertEqual(query, "hasmokan Codeforces profile and rating history")
+            return generated_plan
+
+        with (
+            patch(
+                "routers.research.assess_research_plan_need",
+                return_value={"should_plan": True, "reason": "Broad follow-up research task."},
+            ),
+            patch(
+                "routers.research.resolve_research_query_node",
+                side_effect=fake_resolve_query_node,
+                create=True,
+            ),
+            patch(
+                "routers.research.generate_research_plan",
+                side_effect=fake_generate_research_plan,
+            ),
+        ):
+            response = client.post(
+                "/api/research/plan",
+                json={
+                    "query": "顺便看看他的比赛历史",
+                    "messages": [
+                        {"role": "user", "content": "谁是hasmokan"},
+                        {"role": "assistant", "content": "hasmokan 是一个 GitHub 用户。"},
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {**generated_plan, "query": "顺便看看他的比赛历史", "should_plan": True})
+
     def test_plan_endpoint_does_not_persist_thread_snapshots(self):
         client = TestClient(app)
         generated_plan = {

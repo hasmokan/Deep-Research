@@ -18,6 +18,7 @@ from agents.nodes.conversation_router import (
     stream_answer_direct_node,
 )
 from agents.nodes.generate import stream_generate_node
+from agents.nodes.query_resolution import resolve_research_query_node
 from agents.nodes.web_search import web_search_node
 from core.config import get_settings
 from services.langfuse_observability import get_langfuse_tracer
@@ -101,6 +102,9 @@ async def stream_research_events(
         "report": None,
         "report_thinking": None,
         "latest_result": latest_result,
+        "resolved_query": None,
+        "search_query": None,
+        "context_resolution": None,
         "intent": None,
         "answer": None,
         "result_type": "report",
@@ -157,11 +161,14 @@ async def stream_research_events(
                 },
             )
             await asyncio.sleep(0)
+            state.update(await resolve_research_query_node(state))
             with tracer.start(
                 "intent-routing",
                 as_type="span",
                 input={
                     "query": visible_query,
+                    "resolved_query": state.get("resolved_query"),
+                    "search_query": state.get("search_query"),
                     "has_latest_result": bool(latest_result),
                 },
                 metadata={"run_id": run_id},
@@ -183,6 +190,8 @@ async def stream_research_events(
                     intent=state.get("intent"),
                     route=route,
                     reason=state.get("reason"),
+                    resolved_query=state.get("resolved_query"),
+                    search_query=state.get("search_query"),
                 ),
             )
             await asyncio.sleep(0)
@@ -279,11 +288,11 @@ async def stream_research_events(
                 with tracer.start(
                     "react-agent",
                     as_type="agent",
-                    input={"query": visible_query, "route": route},
+                    input={"query": _resolved_query(state), "display_query": visible_query, "route": route},
                     metadata={"run_id": run_id},
                 ) as react_observation:
                     emitted_answer = False
-                    async for react_event in stream_react_agent_messages(query):
+                    async for react_event in stream_react_agent_messages(_resolved_query(state)):
                         event_type = react_event.get("type")
                         if event_type == "agent_message":
                             message = react_event.get("message") if isinstance(react_event.get("message"), dict) else {}
@@ -452,6 +461,7 @@ async def stream_research_events(
             )
             await asyncio.sleep(0)
             search_tool_call_id = f"web-search-{run_id or 'live'}"
+            search_query = _search_query(state)
             yield record_event(
                 "agent_message",
                 _agent_ai_message(
@@ -461,7 +471,7 @@ async def stream_research_events(
                         {
                             "id": search_tool_call_id,
                             "name": "web_search",
-                            "args": {"query": visible_query},
+                            "args": {"query": search_query},
                         }
                     ],
                 ),
@@ -473,8 +483,9 @@ async def stream_research_events(
                     "search",
                     "tool_call",
                     "Search web",
-                    f"Searching public web sources for: {visible_query}",
-                    query=visible_query,
+                    f"Searching public web sources for: {search_query}",
+                    query=search_query,
+                    display_query=visible_query,
                     tool="web_search",
                 ),
             )
@@ -483,7 +494,8 @@ async def stream_research_events(
                 "web-search",
                 as_type="tool",
                 input={
-                    "query": visible_query,
+                    "query": search_query,
+                    "display_query": visible_query,
                     "contextual_query": query,
                     "provider": "duckduckgo",
                 },
@@ -647,6 +659,20 @@ def _result_payload(state: dict[str, Any]) -> dict[str, Any]:
         "result_type": state.get("result_type") or "report",
         "status": "completed" if state.get("report_completed") else "failed",
     }
+
+
+def _resolved_query(state: dict[str, Any]) -> str:
+    return str(state.get("resolved_query") or state.get("query") or state.get("display_query") or "").strip()
+
+
+def _search_query(state: dict[str, Any]) -> str:
+    return str(
+        state.get("search_query")
+        or state.get("resolved_query")
+        or state.get("display_query")
+        or state.get("query")
+        or ""
+    ).strip()
 
 
 def _route_trace_detail(state: dict[str, Any], route: str) -> str:

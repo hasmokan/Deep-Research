@@ -21,7 +21,7 @@ async def analyze_node(state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Updated state with 'analysis' field
     """
-    query = state["query"]
+    query = _analysis_query(state)
     documents = state.get("documents", [])
 
     # If no documents found, skip analysis
@@ -46,7 +46,7 @@ async def analyze_node(state: dict[str, Any]) -> dict[str, Any]:
 
 async def stream_analyze_node(state: dict[str, Any]):
     """Stream analysis reasoning deltas and yield the final analysis state."""
-    query = state["query"]
+    query = _analysis_query(state)
     documents = state.get("documents", [])
 
     if not documents:
@@ -154,6 +154,10 @@ def _build_analysis_payload(query: str, documents: list[dict[str, Any]]) -> dict
         "query": query,
         "documents": formatted_docs,
     }
+
+
+def _analysis_query(state: dict[str, Any]) -> str:
+    return str(state.get("resolved_query") or state.get("query") or state.get("display_query") or "").strip()
 
 
 def _langchain_config(run_name: str, documents_count: int) -> dict[str, Any]:
