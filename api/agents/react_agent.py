@@ -39,6 +39,16 @@ Use tools when they materially improve the answer:
 When you have enough information, answer directly. Keep answers concise and cite uncertainty.
 """
 
+_FINAL_SYNTHESIS_INSTRUCTION = (
+    "You have reached the tool-use budget. Stop calling tools. Answer from the gathered evidence and clearly note "
+    "any uncertainty or missing information."
+)
+
+_REPEATED_TOOL_CALL_WARNING = (
+    "You are repeating the same tool call without adding new evidence. Stop searching and answer from the gathered "
+    "evidence unless there is a clearly different tool call that would materially change the answer."
+)
+
 
 async def stream_react_agent_messages(
     query: str,
@@ -56,6 +66,8 @@ async def stream_react_agent_messages(
         SystemMessage(content=build_react_system_prompt(active_skills)),
         HumanMessage(content=query),
     ]
+    previous_tool_call_signature: tuple[tuple[str, str], ...] | None = None
+    repeated_tool_call_count = 0
 
     for _round in range(max_rounds):
         response = await runnable_model.ainvoke(
@@ -102,8 +114,36 @@ async def stream_react_agent_messages(
                 "message": _tool_message_payload(tool_call_id, tool_name, content),
             }
 
-    answer = "I reached the maximum number of ReAct tool rounds before producing a final answer."
-    yield {"type": "final", "answer": answer}
+        tool_call_signature = _tool_call_signature(tool_calls)
+        if tool_call_signature == previous_tool_call_signature:
+            repeated_tool_call_count += 1
+        else:
+            previous_tool_call_signature = tool_call_signature
+            repeated_tool_call_count = 1
+
+        if repeated_tool_call_count == 2:
+            messages.append(HumanMessage(content=_REPEATED_TOOL_CALL_WARNING))
+
+    messages.append(HumanMessage(content=_FINAL_SYNTHESIS_INSTRUCTION))
+    synthesis_model = _model_without_tools(runnable_model)
+    response = await synthesis_model.ainvoke(
+        messages,
+        _langchain_config("react-agent-final-synthesis", "final_synthesis"),
+    )
+    messages.append(response)
+
+    ai_message = _serialize_ai_message(response)
+    answer = str(ai_message.get("content") or "").strip()
+    if ai_message.get("tool_calls"):
+        ai_message = {**ai_message, "tool_calls": []}
+    if answer or str(ai_message.get("reasoning_content") or "").strip():
+        yield {"type": "agent_message", "message": ai_message}
+
+    if answer:
+        yield {"type": "final", "answer": answer}
+        return
+
+    yield {"type": "final", "answer": _partial_answer_fallback(messages)}
 
 
 def build_react_system_prompt(skills: list[AgentSkill] | None = None) -> str:
@@ -122,6 +162,22 @@ def _build_model(skills: list[AgentSkill] | None = None) -> Any:
         extra_body={"reasoning_split": True},
     )
     return llm.bind_tools(available_react_tools_for_skills(skills or []))
+
+
+def _model_without_tools(model: Any) -> Any:
+    bind_tools = getattr(model, "bind_tools", None)
+    if not callable(bind_tools):
+        return model
+
+    try:
+        return bind_tools([], tool_choice="none")
+    except TypeError:
+        try:
+            return bind_tools([])
+        except Exception:
+            return model
+    except Exception:
+        return model
 
 
 @tool("web_search", parse_docstring=True)
@@ -195,6 +251,15 @@ def _serialize_tool_call(tool_call: Any) -> dict[str, Any]:
     }
 
 
+def _tool_call_signature(tool_calls: list[dict[str, Any]]) -> tuple[tuple[str, str], ...]:
+    signature = []
+    for tool_call in tool_calls:
+        name = str(tool_call.get("name") or "")
+        args = tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {}
+        signature.append((name, json.dumps(args, sort_keys=True, ensure_ascii=False)))
+    return tuple(signature)
+
+
 def _tool_message_payload(tool_call_id: str, name: str, content: str) -> dict[str, Any]:
     return {
         "type": "tool",
@@ -209,6 +274,22 @@ def _tool_result_content(result: Any) -> str:
     if isinstance(result, str):
         return result
     return json.dumps(result, ensure_ascii=False)
+
+
+def _partial_answer_fallback(messages: list[Any]) -> str:
+    observations = [
+        str(getattr(message, "content", "") or "").strip()
+        for message in messages
+        if isinstance(message, ToolMessage) and str(getattr(message, "content", "") or "").strip()
+    ]
+    if not observations:
+        return "I could not fully complete the request, and I do not have enough gathered evidence to answer reliably."
+
+    summary = "\n".join(f"- {observation}" for observation in observations[-3:])
+    return (
+        "I could not fully complete the request, but here is a partial answer based on the information gathered:\n\n"
+        f"{summary}"
+    )
 
 
 def _format_clarification(args: dict[str, Any]) -> str:

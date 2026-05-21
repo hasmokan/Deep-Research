@@ -98,6 +98,174 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
         self.assertIn("你是想问 hasokan", events[1]["message"]["content"])
         self.assertEqual(events[2]["question"], "你是想问 hasokan，还是 hasmokan？")
 
+    async def test_synthesizes_final_answer_when_tool_rounds_are_exhausted(self):
+        from agents.react_agent import stream_react_agent_messages
+
+        internal_fallback = "I reached the maximum number of ReAct tool rounds before producing a final answer."
+
+        class FakeModel:
+            def __init__(self):
+                self.calls = 0
+                self.invocations = []
+
+            async def ainvoke(self, messages, config=None):
+                self.invocations.append(list(messages))
+                self.calls += 1
+                if self.calls <= 2:
+                    return SimpleNamespace(
+                        id=f"ai-{self.calls}",
+                        content="",
+                        additional_kwargs={},
+                        tool_calls=[
+                            {
+                                "id": f"call-{self.calls}",
+                                "name": "web_search",
+                                "args": {"query": f"hasmokan source {self.calls}"},
+                            }
+                        ],
+                    )
+                return SimpleNamespace(
+                    id="ai-synthesis",
+                    content="Based on the gathered results, hasmokan appears to be a GitHub user.",
+                    additional_kwargs={},
+                    tool_calls=[],
+                )
+
+        async def fake_tool_runner(name, args):
+            return [{"title": f"Result for {args['query']}", "url": "https://example.test/result"}]
+
+        model = FakeModel()
+        events = [
+            event
+            async for event in stream_react_agent_messages(
+                "谁是 hasmokan",
+                model=model,
+                tool_runner=fake_tool_runner,
+                max_rounds=2,
+            )
+        ]
+
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(
+            events[-1]["answer"],
+            "Based on the gathered results, hasmokan appears to be a GitHub user.",
+        )
+        self.assertNotEqual(events[-1]["answer"], internal_fallback)
+        self.assertEqual(model.calls, 3)
+        self.assertIn("stop calling tools", model.invocations[-1][-1].content.lower())
+
+    async def test_warns_model_before_repeating_identical_tool_calls_again(self):
+        from langchain_core.messages import ToolMessage
+
+        from agents.react_agent import stream_react_agent_messages
+
+        class FakeModel:
+            def __init__(self):
+                self.calls = 0
+                self.invocations = []
+
+            async def ainvoke(self, messages, config=None):
+                self.invocations.append(list(messages))
+                self.calls += 1
+                if self.calls <= 3:
+                    return SimpleNamespace(
+                        id=f"ai-{self.calls}",
+                        content="",
+                        additional_kwargs={},
+                        tool_calls=[
+                            {
+                                "id": f"call-{self.calls}",
+                                "name": "web_search",
+                                "args": {"query": "same repeated query"},
+                            }
+                        ],
+                    )
+                return SimpleNamespace(
+                    id="ai-final",
+                    content="The repeated search results point to the same answer.",
+                    additional_kwargs={},
+                    tool_calls=[],
+                )
+
+        async def fake_tool_runner(name, args):
+            return [{"title": "Repeated result", "url": "https://example.test/repeated"}]
+
+        model = FakeModel()
+        events = [
+            event
+            async for event in stream_react_agent_messages(
+                "Find repeated information",
+                model=model,
+                tool_runner=fake_tool_runner,
+                max_rounds=4,
+            )
+        ]
+
+        warning_invocation = model.invocations[2]
+        self.assertIsInstance(warning_invocation[-2], ToolMessage)
+        self.assertIn("repeating the same tool call", warning_invocation[-1].content)
+        self.assertIn("answer from the gathered evidence", warning_invocation[-1].content)
+        self.assertEqual(events[-1]["answer"], "The repeated search results point to the same answer.")
+
+    async def test_does_not_emit_unpaired_tool_calls_from_final_synthesis(self):
+        from agents.react_agent import stream_react_agent_messages
+
+        class FakeModel:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages, config=None):
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(
+                        id="ai-search",
+                        content="",
+                        additional_kwargs={},
+                        tool_calls=[
+                            {
+                                "id": "call-search",
+                                "name": "web_search",
+                                "args": {"query": "hasmokan source"},
+                            }
+                        ],
+                    )
+                return SimpleNamespace(
+                    id="ai-bad-synthesis",
+                    content="",
+                    additional_kwargs={},
+                    tool_calls=[
+                        {
+                            "id": "call-unpaired",
+                            "name": "web_search",
+                            "args": {"query": "another source"},
+                        }
+                    ],
+                )
+
+        async def fake_tool_runner(name, args):
+            return [{"title": "Gathered source", "url": "https://example.test/source"}]
+
+        events = [
+            event
+            async for event in stream_react_agent_messages(
+                "Find information",
+                model=FakeModel(),
+                tool_runner=fake_tool_runner,
+                max_rounds=1,
+            )
+        ]
+
+        emitted_tool_calls = [
+            tool_call
+            for event in events
+            if event["type"] == "agent_message"
+            for tool_call in event["message"].get("tool_calls", [])
+        ]
+        self.assertEqual(emitted_tool_calls, [{"id": "call-search", "name": "web_search", "args": {"query": "hasmokan source"}}])
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertIn("partial answer", events[-1]["answer"])
+        self.assertIn("Gathered source", events[-1]["answer"])
+
     async def test_injects_skill_content_into_system_prompt(self):
         from agents.react_agent import stream_react_agent_messages
         from agents.skills import AgentSkill
