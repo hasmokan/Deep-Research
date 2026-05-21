@@ -121,6 +121,36 @@ function isResearchSession(value: unknown): value is ResearchSession {
   );
 }
 
+function normalizeResearchActivity(activity: ConversationMessage['researchActivity']) {
+  if (!activity) {
+    return activity;
+  }
+
+  return {
+    ...activity,
+    streamStatuses: Array.isArray(activity.streamStatuses) ? activity.streamStatuses : [],
+    streamThinking: Array.isArray(activity.streamThinking) ? activity.streamThinking : [],
+    streamDocuments: Array.isArray(activity.streamDocuments) ? activity.streamDocuments : [],
+    streamTrace: Array.isArray(activity.streamTrace) ? activity.streamTrace : [],
+    streamAgentMessages: Array.isArray(activity.streamAgentMessages) ? activity.streamAgentMessages : [],
+  };
+}
+
+function normalizeConversationMessage(message: ConversationMessage): ConversationMessage {
+  if (!message.researchActivity) {
+    return message;
+  }
+
+  return {
+    ...message,
+    researchActivity: normalizeResearchActivity(message.researchActivity),
+  };
+}
+
+function normalizeConversationMessages(messages: ConversationMessage[]) {
+  return messages.map(normalizeConversationMessage);
+}
+
 export function createResearchSession(options: CreateResearchSessionOptions = {}): ResearchSession {
   const timestamp = options.now ?? getNow();
 
@@ -162,7 +192,7 @@ export function upsertResearchSession(
 
 export function researchSessionFromThread(thread: ResearchThread): ResearchSession {
   const messages = Array.isArray(thread.messages)
-    ? thread.messages as ConversationMessage[]
+    ? normalizeConversationMessages(thread.messages as ConversationMessage[])
     : [];
 
   return {
@@ -232,7 +262,7 @@ export function restoreResearchSessionSnapshot(snapshot: ResearchSessionSnapshot
 
   const restoredSessions = snapshot.sessions.map((session) => ({
     ...session,
-    messages: session.messages.map((message) => (
+    messages: normalizeConversationMessages(session.messages).map((message) => (
       message.researchActivity?.status === 'running' && message.researchActivity.runId
         ? message
         : stopRestoredRunningResearchActivityMessage(message, session.updatedAt)

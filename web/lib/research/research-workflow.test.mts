@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildResearchActivityFromAgentMessages,
   buildResearchActivity,
   buildResearchActivityStream,
   createResearchPlan,
@@ -138,6 +139,81 @@ test('buildResearchActivity keeps backend trace and model thinking events', () =
   assert.equal(traceDocument.title, '真实来源');
   assert.equal(activity[2].kind, 'thinking');
   assert.match(activity[2].detail, /compare source reliability/);
+});
+
+test('buildResearchActivityFromAgentMessages turns ReAct messages into trace steps', () => {
+  const activity = buildResearchActivityFromAgentMessages([
+    {
+      type: 'ai',
+      id: 'ai-1',
+      content: '',
+      reasoning_content: 'Need public evidence before answering.',
+      tool_calls: [
+        {
+          id: 'call-1',
+          name: 'web_search',
+          args: { query: 'hasmokan GitHub' },
+        },
+      ],
+    },
+    {
+      type: 'tool',
+      id: 'tool-call-1',
+      tool_call_id: 'call-1',
+      name: 'web_search',
+      content: '[{"title":"hasmokan - GitHub","url":"https://github.com/hasmokan"}]',
+    },
+  ]);
+
+  assert.deepEqual(
+    activity.map((event) => [event.kind, event.title]),
+    [
+      ['thinking', 'Thinking'],
+      ['tool_call', 'Search web'],
+      ['tool_result', 'Sources found'],
+    ],
+  );
+  assert.equal(activity[0].detail, 'Need public evidence before answering.');
+  assert.equal(activity[1].detail, 'hasmokan GitHub');
+  assert.equal(activity[2].documents?.[0]?.title, 'hasmokan - GitHub');
+});
+
+test('buildResearchActivityFromAgentMessages renders clarification as need-help step', () => {
+  const activity = buildResearchActivityFromAgentMessages([
+    {
+      type: 'ai',
+      id: 'ai-clarify',
+      content: '',
+      reasoning_content: 'The name is ambiguous.',
+      tool_calls: [
+        {
+          id: 'call-clarify',
+          name: 'ask_clarification',
+          args: {
+            question: '你是想问 hasokan，还是 hasmokan？',
+            options: ['hasokan', 'hasmokan'],
+          },
+        },
+      ],
+    },
+    {
+      type: 'tool',
+      id: 'tool-call-clarify',
+      tool_call_id: 'call-clarify',
+      name: 'ask_clarification',
+      content: '你是想问 hasokan，还是 hasmokan？\n\n1. hasokan\n2. hasmokan',
+    },
+  ]);
+
+  assert.deepEqual(
+    activity.map((event) => [event.kind, event.title]),
+    [
+      ['thinking', 'Thinking'],
+      ['tool_call', 'Need your help'],
+      ['tool_result', 'Clarification requested'],
+    ],
+  );
+  assert.match(activity[2].detail, /你是想问 hasokan/);
 });
 
 test('buildResearchActivity summarizes report draft thinking instead of exposing the full report body', () => {
@@ -334,12 +410,20 @@ test('normalizeResearchPlan maps backend generated plan fields into UI fields', 
   );
 });
 
-test('getResearchSubmitAction sends simple follow-ups directly unless deep research mode is on', () => {
+test('getResearchSubmitAction sends all non-deep-research queries directly to backend routing', () => {
   assert.equal(
     getResearchSubmitAction({
       query: '来源是？',
       hasPlan: false,
-      canSendFollowUp: true,
+      isDeepResearchMode: false,
+    }),
+    'start-research',
+  );
+
+  assert.equal(
+    getResearchSubmitAction({
+      query: '帮我看看这个仓库怎么启动',
+      hasPlan: false,
       isDeepResearchMode: false,
     }),
     'start-research',
@@ -349,7 +433,6 @@ test('getResearchSubmitAction sends simple follow-ups directly unless deep resea
     getResearchSubmitAction({
       query: '重新做一个竞品调研',
       hasPlan: false,
-      canSendFollowUp: true,
       isDeepResearchMode: true,
     }),
     'create-plan',
@@ -361,7 +444,6 @@ test('getResearchSubmitAction starts an existing plan when no new query is typed
     getResearchSubmitAction({
       query: '',
       hasPlan: true,
-      canSendFollowUp: false,
       isDeepResearchMode: true,
     }),
     'start-research',

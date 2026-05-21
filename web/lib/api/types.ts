@@ -129,10 +129,33 @@ export interface ResearchStreamTrace {
   documents?: ResearchStreamTraceDocument[];
 }
 
+export interface AgentToolCall {
+  id?: string | null;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export type AgentMessage =
+  | {
+      type: 'ai';
+      id?: string | null;
+      content: string;
+      reasoning_content?: string | null;
+      tool_calls?: AgentToolCall[];
+    }
+  | {
+      type: 'tool';
+      id?: string | null;
+      tool_call_id: string;
+      name: string;
+      content: string;
+    };
+
 export interface ResearchStreamHandlers {
   onMetadata?: (metadata: ResearchStreamMetadata) => void;
   onStatus?: (status: ResearchStreamStatus) => void;
   onTrace?: (trace: ResearchStreamTrace) => void;
+  onAgentMessage?: (message: AgentMessage) => void;
   onDocuments?: (documents: Document[]) => void;
   onThinking?: (thinking: ResearchStreamThinking) => void;
   onAnalysis?: (analysis: string | null) => void;

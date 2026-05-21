@@ -21,6 +21,7 @@ import {
   appendResearchActivityStatus,
   appendResearchActivityDocuments,
   appendResearchActivityTrace,
+  appendResearchActivityAgentMessage,
   appendResearchActivityThinking,
   applyResearchRunToActivityMessage,
   buildResearchRequestMessages,
@@ -178,6 +179,7 @@ export default function Home() {
     addStreamThinking,
     setStreamDocuments,
     addStreamTrace,
+    addStreamAgentMessage,
   } = useResearchStore();
 
   const clearResearchUiState = useCallback(() => {
@@ -223,7 +225,6 @@ export default function Home() {
   const latestContextResult = (isReportResult(result) ? result : null) || latestArtifactResult;
   const sidebarResult = latestContextResult;
   const hasConversation = Boolean(messages.length || activePlan || isPlanning || isLoading || error);
-  const canSendFollowUp = Boolean(latestContextResult);
   const activePlanActivityMessage = activePlan
     ? [...messages].reverse().find((message) => (
         message.researchActivity?.query === activePlan.query
@@ -248,10 +249,11 @@ export default function Home() {
 
       return [
         activity.status,
-        activity.streamStatuses.length,
-        activity.streamThinking.map((thinking) => `${thinking.id ?? ''}:${thinking.text.length}`).join(','),
-        activity.streamDocuments.length,
-        activity.streamTrace.length,
+        activity.streamStatuses?.length ?? 0,
+        (activity.streamThinking ?? []).map((thinking) => `${thinking.id ?? ''}:${thinking.text.length}`).join(','),
+        activity.streamDocuments?.length ?? 0,
+        activity.streamTrace?.length ?? 0,
+        activity.streamAgentMessages?.length ?? 0,
       ].join(':');
     })
     .join('|');
@@ -435,6 +437,14 @@ export default function Home() {
                 (message) => appendResearchActivityTrace(message, trace),
               );
             },
+            onAgentMessage: (agentMessage) => {
+              addStreamAgentMessage(agentMessage);
+              updateResearchActivityMessage(
+                activity.sessionId,
+                activity.messageId,
+                (message) => appendResearchActivityAgentMessage(message, agentMessage),
+              );
+            },
             onDocuments: (documents) => {
               setStreamDocuments(documents);
               updateResearchActivityMessage(
@@ -488,17 +498,18 @@ export default function Home() {
       }
     }));
   }, [
-	    addStreamStatus,
-	    addStreamThinking,
-	    addStreamTrace,
+    addStreamAgentMessage,
+    addStreamStatus,
+    addStreamThinking,
+    addStreamTrace,
     activeSessionIdRef,
-	    hasLoadedSessions,
-	    setLoading,
-	    setResult,
-	    setStreamDocuments,
+    hasLoadedSessions,
+    setLoading,
+    setResult,
+    setStreamDocuments,
     sessionsRef,
-	    updateResearchActivityMessage,
-	  ]);
+    updateResearchActivityMessage,
+  ]);
 
   const activateSession = (session: ResearchSession) => {
     abortControllerRef.current?.abort();
@@ -713,6 +724,14 @@ export default function Home() {
               runSessionId,
               activityMessage.id,
               (message) => appendResearchActivityTrace(message, trace),
+            );
+          },
+          onAgentMessage: (agentMessage) => {
+            addStreamAgentMessage(agentMessage);
+            updateResearchActivityMessage(
+              runSessionId,
+              activityMessage.id,
+              (message) => appendResearchActivityAgentMessage(message, agentMessage),
             );
           },
           onDocuments: (documents) => {
@@ -997,7 +1016,6 @@ export default function Home() {
             isLoading={isLoading}
             isPlanning={isPlanning}
             hasPlan={Boolean(activePlan)}
-            canSendFollowUp={canSendFollowUp}
             isDeepResearchMode={isDeepResearchMode}
             onQueryChange={handleQueryChange}
             onCreatePlan={handleCreatePlan}

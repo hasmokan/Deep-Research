@@ -97,6 +97,11 @@ class ResearchStreamTests(TestCase):
             }
 
         with (
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                return_value={"intent": "new_research", "reason": "test"},
+            ),
             patch.object(research_stream, "web_search_node", fake_web_search_node),
             patch.object(research_stream, "stream_analyze_node", fake_analyze_node),
             patch.object(research_stream, "stream_generate_node", fake_generate_node),
@@ -119,10 +124,20 @@ class ResearchStreamTests(TestCase):
             for event in events
             if event.startswith("event: thinking")
         ]
+        agent_messages = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: agent_message")
+        ]
         self.assertEqual(thinking_payloads[0]["id"], "analysis-thinking")
         self.assertEqual(thinking_payloads[0]["text"], "Reading the source.")
         self.assertEqual(thinking_payloads[1]["id"], "report-thinking")
         self.assertEqual(thinking_payloads[1]["text"], "Drafting the report.")
+        self.assertEqual(agent_messages[0]["type"], "ai")
+        self.assertEqual(agent_messages[0]["tool_calls"][0]["name"], "web_search")
+        self.assertEqual(agent_messages[1]["type"], "tool")
+        self.assertEqual(agent_messages[1]["tool_call_id"], agent_messages[0]["tool_calls"][0]["id"])
+        self.assertIn("Example Source", agent_messages[1]["content"])
 
     def test_coding_stream_forwards_sandbox_trace_events(self):
         from agents import research_stream
@@ -240,6 +255,11 @@ class ResearchStreamTests(TestCase):
             }
 
         with (
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                return_value={"intent": "new_research", "reason": "test"},
+            ),
             patch.object(research_stream, "web_search_node", fake_web_search_node),
             patch.object(research_stream, "stream_analyze_node", fake_analyze_node),
             patch.object(research_stream, "stream_generate_node", fake_generate_node),

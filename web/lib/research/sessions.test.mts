@@ -257,3 +257,80 @@ test('restoreLocalResearchSessionState restores the local active session', () =>
     ['newer', 'older'],
   );
 });
+
+test('restoreLocalResearchSessionState normalizes legacy research activity stream arrays', () => {
+  const storage = createMemoryStorage(JSON.stringify({
+    activeSessionId: 'legacy-session',
+    sessions: [
+      {
+        id: 'legacy-session',
+        title: 'Legacy session',
+        latestResult: null,
+        createdAt: '2026-05-16T10:00:00.000Z',
+        updatedAt: '2026-05-16T10:05:00.000Z',
+        messages: [
+          {
+            id: 'assistant-legacy',
+            role: 'assistant',
+            content: 'Researching "legacy query".',
+            createdAt: '2026-05-16T10:00:00.000Z',
+            researchActivity: {
+              query: 'legacy query',
+              status: 'running',
+              streamStatuses: [],
+              streamThinking: [],
+              streamDocuments: [],
+              streamTrace: [],
+              startedAt: '2026-05-16T10:00:00.000Z',
+              updatedAt: '2026-05-16T10:05:00.000Z',
+            },
+          },
+        ],
+      },
+    ],
+  }));
+
+  const restored = restoreLocalResearchSessionState(storage);
+  const researchActivity = restored.activeSession?.messages[0]?.researchActivity;
+
+  assert.deepEqual(researchActivity?.streamStatuses, []);
+  assert.deepEqual(researchActivity?.streamThinking, []);
+  assert.deepEqual(researchActivity?.streamDocuments, []);
+  assert.deepEqual(researchActivity?.streamTrace, []);
+  assert.deepEqual(researchActivity?.streamAgentMessages, []);
+});
+
+test('researchSessionFromThread normalizes legacy research activity stream arrays', () => {
+  const session = researchSessionFromThread({
+    thread_id: 'thread-legacy',
+    title: 'Legacy thread',
+    messages: [
+      {
+        id: 'assistant-legacy',
+        role: 'assistant',
+        content: 'Researching "legacy query".',
+        createdAt: '2026-05-16T10:00:00.000Z',
+        researchActivity: {
+          query: 'legacy query',
+          status: 'running',
+          streamStatuses: [],
+          streamThinking: [],
+          streamDocuments: [],
+          streamTrace: [],
+          startedAt: '2026-05-16T10:00:00.000Z',
+          updatedAt: '2026-05-16T10:05:00.000Z',
+        },
+      },
+    ],
+    created_at: '2026-05-16T10:00:00.000Z',
+    updated_at: '2026-05-16T10:05:00.000Z',
+  });
+
+  const researchActivity = session.messages[0]?.researchActivity;
+
+  assert.deepEqual(researchActivity?.streamStatuses, []);
+  assert.deepEqual(researchActivity?.streamThinking, []);
+  assert.deepEqual(researchActivity?.streamDocuments, []);
+  assert.deepEqual(researchActivity?.streamTrace, []);
+  assert.deepEqual(researchActivity?.streamAgentMessages, []);
+});

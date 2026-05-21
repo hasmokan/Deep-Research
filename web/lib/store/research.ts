@@ -4,6 +4,7 @@
 
 import { create } from 'zustand';
 import type {
+  AgentMessage,
   Document,
   ResearchResult,
   ResearchStreamStatus,
@@ -21,6 +22,7 @@ interface ResearchState {
   streamThinking: ResearchStreamThinking[];
   streamDocuments: Document[];
   streamTrace: ResearchStreamTrace[];
+  streamAgentMessages: AgentMessage[];
 
   // Actions
   setQuery: (query: string) => void;
@@ -32,6 +34,7 @@ interface ResearchState {
   addStreamThinking: (thinking: ResearchStreamThinking) => void;
   setStreamDocuments: (documents: Document[]) => void;
   addStreamTrace: (trace: ResearchStreamTrace) => void;
+  addStreamAgentMessage: (message: AgentMessage) => void;
   reset: () => void;
 }
 
@@ -45,13 +48,14 @@ export const useResearchStore = create<ResearchState>((set) => ({
   streamThinking: [],
   streamDocuments: [],
   streamTrace: [],
+  streamAgentMessages: [],
 
   // Actions
   setQuery: (query) => set({ query }),
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
   setResult: (result) => set({ result }),
-  resetStream: () => set({ streamStatuses: [], streamThinking: [], streamDocuments: [], streamTrace: [] }),
+  resetStream: () => set({ streamStatuses: [], streamThinking: [], streamDocuments: [], streamTrace: [], streamAgentMessages: [] }),
   addStreamStatus: (status) => set((state) => ({
     streamStatuses: [...state.streamStatuses, status],
   })),
@@ -62,6 +66,9 @@ export const useResearchStore = create<ResearchState>((set) => ({
   addStreamTrace: (trace) => set((state) => ({
     streamTrace: [...state.streamTrace, trace],
   })),
+  addStreamAgentMessage: (message) => set((state) => ({
+    streamAgentMessages: [...state.streamAgentMessages, message],
+  })),
   reset: () => set({
     query: '',
     isLoading: false,
@@ -71,6 +78,7 @@ export const useResearchStore = create<ResearchState>((set) => ({
     streamThinking: [],
     streamDocuments: [],
     streamTrace: [],
+    streamAgentMessages: [],
   }),
 }));
 

@@ -20,6 +20,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import {
+  buildResearchActivityFromAgentMessages,
   buildResearchActivity,
   buildResearchActivityStream,
   type ResearchActivityEvent,
@@ -275,8 +276,11 @@ export function LoadingState({ activity }: LoadingStateProps = {}) {
   const streamThinking = activity?.streamThinking ?? store.streamThinking;
   const streamDocuments = activity?.streamDocuments ?? store.streamDocuments;
   const streamTrace = activity?.streamTrace ?? store.streamTrace;
+  const streamAgentMessages = activity?.streamAgentMessages ?? store.streamAgentMessages;
   const activityStatus = activity?.status ?? 'running';
-  const streamActivity = buildResearchActivity(streamStatuses, streamThinking, streamDocuments, streamTrace);
+  const streamActivity = streamAgentMessages.length > 0
+    ? buildResearchActivityFromAgentMessages(streamAgentMessages)
+    : buildResearchActivity(streamStatuses, streamThinking, streamDocuments, streamTrace);
   const activityStream = buildResearchActivityStream(streamActivity, showOlderSteps);
   const visibleActivity = activityStream.visibleEvents;
   const activeActivityIndex = visibleActivity.length - 1;

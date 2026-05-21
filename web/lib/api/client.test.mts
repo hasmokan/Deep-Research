@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { ApiClient } from './client.ts';
 import type {
+  AgentMessage,
   ResearchPlanResponse,
   ResearchPlanStreamStatus,
   ResearchResult,
@@ -173,6 +174,71 @@ test('streamResearchRun reconnects to a persisted run event stream', async () =>
       { stage: 'search', label: 'Searching', message: 'Searching web.' },
     ]);
     assert.deepEqual(restoredResult, result);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('streamResearch forwards ReAct agent messages', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const agentMessages: AgentMessage[] = [];
+  const result: ResearchResult = {
+    query: '谁是 hasmokan',
+    documents: [],
+    analysis: null,
+    report: null,
+    answer: 'hasmokan appears to be a GitHub user.',
+    result_type: 'answer',
+    status: 'completed',
+  };
+
+  const aiMessage: AgentMessage = {
+    type: 'ai',
+    id: 'ai-1',
+    content: '',
+    reasoning_content: 'Need public evidence before answering.',
+    tool_calls: [
+      {
+        id: 'call-1',
+        name: 'web_search',
+        args: { query: 'hasmokan GitHub' },
+      },
+    ],
+  };
+  const toolMessage: AgentMessage = {
+    type: 'tool',
+    id: 'tool-call-1',
+    tool_call_id: 'call-1',
+    name: 'web_search',
+    content: '[{"title":"hasmokan - GitHub","url":"https://github.com/hasmokan"}]',
+  };
+
+  globalThis.fetch = async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: agent_message\ndata: ${JSON.stringify(aiMessage)}\n\n`));
+        controller.enqueue(encoder.encode(`event: agent_message\ndata: ${JSON.stringify(toolMessage)}\n\n`));
+        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.close();
+      },
+    });
+
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    const streamedResult = await client.streamResearch(
+      { query: '谁是 hasmokan' },
+      { onAgentMessage: (message) => agentMessages.push(message) },
+    );
+
+    assert.deepEqual(agentMessages, [aiMessage, toolMessage]);
+    assert.deepEqual(streamedResult, result);
   } finally {
     globalThis.fetch = originalFetch;
   }

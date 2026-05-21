@@ -1,4 +1,5 @@
 import type {
+  AgentMessage,
   Document,
   ResearchRequestMessage,
   ResearchResult,
@@ -21,6 +22,7 @@ export interface ConversationResearchActivity {
   streamThinking: ResearchStreamThinking[];
   streamDocuments: Document[];
   streamTrace: ResearchStreamTrace[];
+  streamAgentMessages: AgentMessage[];
   startedAt: string;
   updatedAt: string;
 }
@@ -160,6 +162,27 @@ function isResearchStreamTrace(value: unknown): value is ResearchStreamTrace {
   );
 }
 
+function isAgentMessage(value: unknown): value is AgentMessage {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const message = value as AgentMessage;
+  if (message.type === 'ai') {
+    return typeof message.content === 'string';
+  }
+
+  if (message.type === 'tool') {
+    return (
+      typeof message.tool_call_id === 'string' &&
+      typeof message.name === 'string' &&
+      typeof message.content === 'string'
+    );
+  }
+
+  return false;
+}
+
 function isResearchResult(value: unknown): value is ResearchResult {
   if (!value || typeof value !== 'object') {
     return false;
@@ -236,6 +259,7 @@ export function createAssistantResearchActivityMessage(
       streamThinking: [],
       streamDocuments: [],
       streamTrace: [],
+      streamAgentMessages: [],
       startedAt: timestamp,
       updatedAt: timestamp,
     },
@@ -336,6 +360,26 @@ export function appendResearchActivityTrace(
       ...message.researchActivity,
       status: 'running',
       streamTrace: [...message.researchActivity.streamTrace, trace],
+      updatedAt: now,
+    },
+  };
+}
+
+export function appendResearchActivityAgentMessage(
+  message: ConversationMessage,
+  agentMessage: AgentMessage,
+  now: string = getNow(),
+): ConversationMessage {
+  if (!message.researchActivity) {
+    return message;
+  }
+
+  return {
+    ...message,
+    researchActivity: {
+      ...message.researchActivity,
+      status: 'running',
+      streamAgentMessages: [...(message.researchActivity.streamAgentMessages ?? []), agentMessage],
       updatedAt: now,
     },
   };
@@ -463,6 +507,7 @@ export function applyResearchRunToActivityMessage(
       streamThinking: [],
       streamDocuments: [],
       streamTrace: [],
+      streamAgentMessages: [],
       updatedAt: runUpdatedAt,
     },
   };
@@ -492,6 +537,10 @@ function applyResearchRunEvent(
 
   if (event.event === 'trace' && isResearchStreamTrace(event.data)) {
     return appendResearchActivityTrace(message, event.data, updatedAt);
+  }
+
+  if (event.event === 'agent_message' && isAgentMessage(event.data)) {
+    return appendResearchActivityAgentMessage(message, event.data, updatedAt);
   }
 
   if (event.event === 'thinking' && isResearchStreamThinking(event.data)) {

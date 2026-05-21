@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   appendAssistantAnswerDelta,
+  appendResearchActivityAgentMessage,
   appendResearchActivityThinking,
   appendResearchActivityStatus,
   appendResearchActivityDocuments,
@@ -193,6 +194,68 @@ test('assistant research activity thinking deltas update the same trace entry', 
     'Reading source one. Comparing source two.',
   );
   assert.equal(secondUpdate.researchActivity?.updatedAt, '2026-05-16T10:01:01.000Z');
+});
+
+test('assistant research activity stores ReAct agent messages', () => {
+  const activityMessage = createAssistantResearchActivityMessage('谁是 hasmokan', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const updatedMessage = appendResearchActivityAgentMessage(
+    activityMessage,
+    {
+      type: 'ai',
+      id: 'ai-1',
+      content: '',
+      reasoning_content: 'Need public evidence before answering.',
+      tool_calls: [
+        {
+          id: 'call-1',
+          name: 'web_search',
+          args: { query: 'hasmokan GitHub' },
+        },
+      ],
+    },
+    '2026-05-16T10:01:00.000Z',
+  );
+
+  assert.equal(updatedMessage.researchActivity?.streamAgentMessages.length, 1);
+  assert.equal(updatedMessage.researchActivity?.streamAgentMessages[0]?.type, 'ai');
+  assert.equal(updatedMessage.researchActivity?.updatedAt, '2026-05-16T10:01:00.000Z');
+});
+
+test('applyResearchRunToActivityMessage restores ReAct agent messages', () => {
+  const activityMessage = createAssistantResearchActivityMessage('谁是 hasmokan', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const restoredMessage = applyResearchRunToActivityMessage(activityMessage, {
+    run_id: 'run-123',
+    query: '谁是 hasmokan',
+    status: 'running',
+    created_at: '2026-05-16T10:00:00.000Z',
+    updated_at: '2026-05-16T10:01:00.000Z',
+    events: [
+      {
+        run_id: 'run-123',
+        event: 'agent_message',
+        data: {
+          type: 'tool',
+          id: 'tool-call-1',
+          tool_call_id: 'call-1',
+          name: 'web_search',
+          content: '[]',
+        },
+        seq: 1,
+        created_at: '2026-05-16T10:01:00.000Z',
+      },
+    ],
+  });
+
+  assert.equal(restoredMessage.researchActivity?.streamAgentMessages.length, 1);
+  assert.equal(restoredMessage.researchActivity?.streamAgentMessages[0]?.type, 'tool');
 });
 
 test('research activity stores backend run id for later restoration', () => {

@@ -24,7 +24,6 @@ interface SearchFormProps {
   isLoading: boolean;
   isPlanning?: boolean;
   hasPlan: boolean;
-  canSendFollowUp?: boolean;
   isDeepResearchMode: boolean;
   onQueryChange: (query: string) => void;
   onCreatePlan: () => void | Promise<void>;
@@ -38,7 +37,6 @@ export function SearchForm({
   isLoading,
   isPlanning = false,
   hasPlan,
-  canSendFollowUp = false,
   isDeepResearchMode,
   onQueryChange,
   onCreatePlan,
@@ -63,7 +61,6 @@ export function SearchForm({
     const action = getResearchSubmitAction({
       query: currentQuery,
       hasPlan,
-      canSendFollowUp,
       isDeepResearchMode,
     });
 

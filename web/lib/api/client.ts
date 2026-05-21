@@ -334,6 +334,8 @@ export class ApiClient {
       handlers.onStatus?.(payload);
     } else if (event === 'trace') {
       handlers.onTrace?.(payload);
+    } else if (event === 'agent_message') {
+      handlers.onAgentMessage?.(payload);
     } else if (event === 'documents') {
       handlers.onDocuments?.(payload.documents ?? []);
     } else if (event === 'thinking') {

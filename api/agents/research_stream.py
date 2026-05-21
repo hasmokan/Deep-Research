@@ -365,6 +365,22 @@ async def stream_research_events(
                 },
             )
             await asyncio.sleep(0)
+            search_tool_call_id = f"web-search-{run_id or 'live'}"
+            yield record_event(
+                "agent_message",
+                _agent_ai_message(
+                    "search-reasoning",
+                    "Searching public web sources before answering.",
+                    [
+                        {
+                            "id": search_tool_call_id,
+                            "name": "web_search",
+                            "args": {"query": visible_query},
+                        }
+                    ],
+                ),
+            )
+            await asyncio.sleep(0)
             yield record_event(
                 "trace",
                 _trace_event(
@@ -394,6 +410,15 @@ async def stream_research_events(
                     "documents": _documents_observability_items(documents),
                 })
             yield record_event("documents", {"documents": documents})
+            await asyncio.sleep(0)
+            yield record_event(
+                "agent_message",
+                _agent_tool_message(
+                    search_tool_call_id,
+                    "web_search",
+                    _agent_tool_content(_document_trace_items(documents)),
+                ),
+            )
             await asyncio.sleep(0)
             yield record_event(
                 "trace",
@@ -545,6 +570,37 @@ def _thinking_payload(event: dict[str, Any]) -> dict[str, Any]:
         "label": event.get("label") or "Thinking",
         "text": event.get("text") or "",
     }
+
+
+def _agent_ai_message(
+    message_id: str,
+    reasoning_content: str,
+    tool_calls: list[dict[str, Any]] | None = None,
+    content: str = "",
+) -> dict[str, Any]:
+    return {
+        "type": "ai",
+        "id": message_id,
+        "content": content,
+        "reasoning_content": reasoning_content,
+        "tool_calls": tool_calls or [],
+    }
+
+
+def _agent_tool_message(tool_call_id: str, name: str, content: str) -> dict[str, Any]:
+    return {
+        "type": "tool",
+        "id": f"tool-{tool_call_id}",
+        "tool_call_id": tool_call_id,
+        "name": name,
+        "content": content,
+    }
+
+
+def _agent_tool_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _documents_observability_items(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -1,4 +1,6 @@
 import type {
+  AgentMessage,
+  AgentToolCall,
   Document,
   ResearchPlanResponse,
   ResearchStreamStatus,
@@ -26,7 +28,6 @@ export type ResearchSubmitAction = 'none' | 'create-plan' | 'start-research';
 export interface ResearchSubmitDecisionInput {
   query: string;
   hasPlan: boolean;
-  canSendFollowUp: boolean;
   isDeepResearchMode: boolean;
 }
 
@@ -132,7 +133,6 @@ export function normalizeResearchPlan(response: ResearchPlanResponse): ResearchP
 export function getResearchSubmitAction({
   query,
   hasPlan,
-  canSendFollowUp,
   isDeepResearchMode,
 }: ResearchSubmitDecisionInput): ResearchSubmitAction {
   const hasQuery = query.trim().length > 0;
@@ -141,7 +141,7 @@ export function getResearchSubmitAction({
     return 'none';
   }
 
-  if (hasQuery && canSendFollowUp && !isDeepResearchMode) {
+  if (hasQuery && !isDeepResearchMode) {
     return 'start-research';
   }
 
@@ -233,6 +233,53 @@ function getTraceDetail(event: ResearchStreamTrace) {
   return event.detail;
 }
 
+export function buildResearchActivityFromAgentMessages(messages: AgentMessage[]): ResearchActivityEvent[] {
+  const events: ResearchActivityEvent[] = [];
+
+  for (const message of messages) {
+    if (message.type !== 'ai') {
+      continue;
+    }
+
+    const reasoning = message.reasoning_content?.trim();
+    if (reasoning) {
+      events.push({
+        id: message.id ? `${message.id}-reasoning` : `agent-reasoning-${events.length}`,
+        stage: 'analyze',
+        kind: 'thinking',
+        title: 'Thinking',
+        detail: reasoning,
+      });
+    }
+
+    for (const toolCall of message.tool_calls ?? []) {
+      const toolResult = findAgentToolResult(messages, toolCall.id);
+      events.push({
+        id: toolCall.id ? `${toolCall.id}-call` : `agent-tool-call-${events.length}`,
+        stage: stageForAgentTool(toolCall.name),
+        kind: 'tool_call',
+        title: titleForAgentToolCall(toolCall.name),
+        detail: detailForAgentToolCall(toolCall),
+        tool: toolCall.name,
+      });
+
+      if (toolResult) {
+        events.push({
+          id: toolResult.id ? `${toolResult.id}-result` : `${toolCall.id ?? events.length}-result`,
+          stage: stageForAgentTool(toolCall.name),
+          kind: 'tool_result',
+          title: titleForAgentToolResult(toolCall.name),
+          detail: detailForAgentToolResult(toolCall.name, toolResult.content),
+          tool: toolCall.name,
+          documents: documentsForAgentToolResult(toolCall.name, toolResult.content),
+        });
+      }
+    }
+  }
+
+  return events;
+}
+
 export function buildResearchActivity(
   statuses: ResearchStreamStatus[],
   thinking: ResearchStreamThinking[],
@@ -316,6 +363,97 @@ export function buildResearchActivity(
   });
 
   return events;
+}
+
+function findAgentToolResult(messages: AgentMessage[], toolCallId?: string | null) {
+  if (!toolCallId) {
+    return undefined;
+  }
+
+  return messages.find((message): message is Extract<AgentMessage, { type: 'tool' }> => (
+    message.type === 'tool' && message.tool_call_id === toolCallId
+  ));
+}
+
+function stageForAgentTool(toolName: string): ResearchActivityEvent['stage'] {
+  if (toolName === 'web_search') {
+    return 'search';
+  }
+  if (toolName === 'ask_clarification') {
+    return 'answer';
+  }
+  if (toolName.includes('file') || toolName.includes('dir') || toolName.includes('bash') || toolName.includes('python')) {
+    return 'coding';
+  }
+  return 'analyze';
+}
+
+function titleForAgentToolCall(toolName: string) {
+  const labels: Record<string, string> = {
+    web_search: 'Search web',
+    ask_clarification: 'Need your help',
+    read_file: 'Read file',
+    list_dir: 'List directory',
+    bash: 'Execute command',
+    run_python: 'Run Python',
+    write_todos: 'Write to-dos',
+  };
+
+  return labels[toolName] ?? `Use ${toolName}`;
+}
+
+function titleForAgentToolResult(toolName: string) {
+  if (toolName === 'web_search') {
+    return 'Sources found';
+  }
+  if (toolName === 'ask_clarification') {
+    return 'Clarification requested';
+  }
+  return 'Tool result';
+}
+
+function detailForAgentToolCall(toolCall: AgentToolCall) {
+  if (toolCall.name === 'web_search' && typeof toolCall.args.query === 'string') {
+    return toolCall.args.query;
+  }
+  if (toolCall.name === 'ask_clarification' && typeof toolCall.args.question === 'string') {
+    return toolCall.args.question;
+  }
+  return JSON.stringify(toolCall.args);
+}
+
+function detailForAgentToolResult(toolName: string, content: string) {
+  if (toolName === 'web_search') {
+    const documents = documentsForAgentToolResult(toolName, content);
+    return `Found ${documents.length} source candidate${documents.length === 1 ? '' : 's'}.`;
+  }
+  return content;
+}
+
+function documentsForAgentToolResult(toolName: string, content: string): ResearchStreamTraceDocument[] {
+  if (toolName !== 'web_search') {
+    return [];
+  }
+
+  try {
+    const payload = JSON.parse(content);
+    if (!Array.isArray(payload)) {
+      return [];
+    }
+
+    return payload
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+      .map((item, index) => ({
+        id: typeof item.id === 'string' || typeof item.id === 'number' ? item.id : `agent-web-${index}`,
+        title: typeof item.title === 'string' ? item.title : `Source ${index + 1}`,
+        url: typeof item.url === 'string' ? item.url : null,
+        source: typeof item.source === 'string' ? item.source : null,
+        provider: 'react',
+        type: 'web_search',
+      }));
+  } catch {
+    return [];
+  }
 }
 
 export function buildResearchActivityStream(
