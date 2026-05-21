@@ -19,6 +19,8 @@ interface SearchFormProps {
   query: string;
   isLoading: boolean;
   isPlanning?: boolean;
+  isDisabled?: boolean;
+  placeholder?: string;
   hasPlan: boolean;
   isDeepResearchMode: boolean;
   onQueryChange: (query: string) => void;
@@ -32,6 +34,8 @@ export function SearchForm({
   query,
   isLoading,
   isPlanning = false,
+  isDisabled = false,
+  placeholder = 'Get a detailed report',
   hasPlan,
   isDeepResearchMode,
   onQueryChange,
@@ -44,6 +48,10 @@ export function SearchForm({
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
+
+    if (isDisabled) {
+      return;
+    }
 
     if (isLoading) {
       onStop();
@@ -92,11 +100,11 @@ export function SearchForm({
       className="pointer-events-auto mx-auto w-full max-w-2xl rounded-2xl border border-border bg-card/97 p-2 shadow-[0_10px_32px_rgba(0,0,0,0.12)] backdrop-blur-2xl dark:shadow-[0_10px_32px_rgba(0,0,0,0.32)]"
     >
       <Textarea
-        placeholder="Get a detailed report"
+        placeholder={placeholder}
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
         onKeyDown={handleTextareaKeyDown}
-        disabled={isLoading || isPlanning}
+        disabled={isDisabled || isLoading || isPlanning}
         rows={2}
         className="min-h-10 resize-none border-0 bg-transparent px-3 py-2 text-sm shadow-none focus-visible:ring-0"
       />
@@ -108,6 +116,7 @@ export function SearchForm({
             variant={isDeepResearchMode ? 'secondary' : 'ghost'}
             className="h-8 rounded-lg px-2.5 text-xs"
             aria-pressed={isDeepResearchMode}
+            disabled={isDisabled}
             onClick={onToggleDeepResearchMode}
           >
             <SlidersHorizontal className="h-4 w-4" />
@@ -118,7 +127,7 @@ export function SearchForm({
         <div className="flex shrink-0 items-center gap-1.5">
           <Button
             type="submit"
-            disabled={(!currentQuery && !isLoading) || isPlanning}
+            disabled={isDisabled || (!currentQuery && !isLoading) || isPlanning}
             size="icon"
             className="h-9 w-9 rounded-full bg-foreground text-background hover:bg-foreground/90"
             aria-label={isLoading ? 'Stop research' : isPlanning ? 'Creating plan' : hasPlan ? 'Start research' : 'Create plan'}

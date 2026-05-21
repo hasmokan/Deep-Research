@@ -5,7 +5,16 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, LogOut, SearchCheck, Sparkles } from 'lucide-react';
+import {
+  BookOpenCheck,
+  CheckCircle2,
+  Compass,
+  FlaskConical,
+  LogOut,
+  SearchCheck,
+  Sparkles,
+  type LucideIcon,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LoginScreen } from '@/components/auth/login-screen';
 import { ChatSidebar } from '@/components/layouts/chat-sidebar';
@@ -46,6 +55,24 @@ import {
 } from '@/lib/research/sessions';
 import { useAuthenticatedResearchSessions } from '@/lib/research/use-authenticated-research-sessions';
 import { useResearchStore } from '@/lib/store/research';
+
+const STARTER_PROMPTS: Array<{ label: string; prompt: string; Icon: LucideIcon }> = [
+  {
+    label: 'AI agent product map',
+    prompt: 'Map the current AI agent product landscape and compare the strongest positioning signals.',
+    Icon: Compass,
+  },
+  {
+    label: 'Company strategy brief',
+    prompt: 'Compare OpenAI and Anthropic strategy across product, distribution, and enterprise adoption.',
+    Icon: BookOpenCheck,
+  },
+  {
+    label: 'Evidence timeline',
+    prompt: 'Build a source-backed timeline for recent AI policy and model release milestones.',
+    Icon: FlaskConical,
+  },
+];
 
 function UserBubble({ content }: { content: string }) {
   return (
@@ -243,6 +270,8 @@ export default function Home() {
   const hasInlineRunningActivity = messages.some((message) => (
     message.researchActivity?.status === 'running' && !message.result
   ));
+  const isWorkspacePending = !hasLoadedSessions;
+  const canUseWorkspace = hasLoadedSessions && Boolean(authSession);
   const shouldShowPlanPanel = shouldRenderResearchPlanShell({
     isPlanning: false,
     hasPlan: Boolean(activePlan),
@@ -586,6 +615,14 @@ export default function Home() {
     }
   };
 
+  const handleStarterPrompt = (prompt: string) => {
+    if (!canUseWorkspace) {
+      return;
+    }
+
+    handleQueryChange(prompt);
+  };
+
   const handleCreatePlan = async () => {
     if (!currentQuery) {
       setError('Please enter a research query');
@@ -885,15 +922,7 @@ export default function Home() {
     );
   }
 
-  if (!hasLoadedSessions) {
-    return (
-      <main className="flex min-h-dvh items-center justify-center bg-background text-sm text-muted-foreground">
-        Loading your workspace...
-      </main>
-    );
-  }
-
-  if (!authSession) {
+  if (hasLoadedSessions && !authSession) {
     return (
       <LoginScreen
         error={authError}
@@ -904,10 +933,15 @@ export default function Home() {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-background text-foreground">
+    <div
+      className="flex h-dvh overflow-hidden bg-background text-foreground"
+      aria-busy={isWorkspacePending}
+    >
       <ChatSidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
+        isDisabled={!canUseWorkspace}
+        isPending={isWorkspacePending}
         onNewChat={handleNewChat}
         onSelectSession={handleSelectSession}
       />
@@ -922,37 +956,72 @@ export default function Home() {
           </div>
           <div className="hidden lg:block" />
           <div className="flex min-w-0 items-center gap-2">
-            <span className="hidden max-w-[240px] truncate text-sm text-muted-foreground md:inline">
-              {authSession.user.email}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-9 w-9 rounded-lg"
-              aria-label="Sign out"
-              onClick={() => {
-                void handleSignOut();
-              }}
-            >
-              <LogOut className="h-4 w-4" />
-            </Button>
+            {authSession && (
+              <>
+                <span className="hidden max-w-[240px] truncate text-sm text-muted-foreground md:inline">
+                  {authSession.user.email}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 rounded-lg"
+                  aria-label="Sign out"
+                  onClick={() => {
+                    void handleSignOut();
+                  }}
+                >
+                  <LogOut className="h-4 w-4" />
+                </Button>
+              </>
+            )}
           </div>
         </header>
 
         <div ref={conversationScrollRef} className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-4 pb-48 pt-5 md:px-5">
             {!hasConversation && (
-              <div className="flex flex-1 items-center justify-center">
-                <div className="max-w-2xl text-center">
-                  <div className="mx-auto mb-6 flex h-11 w-11 items-center justify-center rounded-2xl bg-foreground text-background">
-                    <Sparkles className="h-5 w-5" />
+              <div className="flex flex-1 items-start justify-center pt-[18vh] md:pt-[21vh]">
+                <div className="w-full max-w-[640px]">
+                  <div className="mx-auto mb-4 max-w-[480px] text-center">
+                    <h1 className="text-2xl font-semibold leading-tight text-foreground md:text-[28px]">
+                      Hello again.
+                    </h1>
+                    <p className="mx-auto mt-3 text-sm leading-6 text-muted-foreground">
+                      Ask a question, compare sources, or turn a thread into a focused research brief.
+                    </p>
                   </div>
-                  <h1 className="text-4xl font-semibold md:text-5xl">
-                    What should we research?
-                  </h1>
-                  <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-muted-foreground">
-                    Ask for a detailed report, review the plan, then start a live deep research run.
-                  </p>
+
+                  <SearchForm
+                    query={localQuery}
+                    isLoading={isLoading}
+                    isPlanning={isPlanning}
+                    isDisabled={!canUseWorkspace}
+                    placeholder="How can I assist you today?"
+                    hasPlan={Boolean(activePlan)}
+                    isDeepResearchMode={isDeepResearchMode}
+                    onQueryChange={handleQueryChange}
+                    onCreatePlan={handleCreatePlan}
+                    onStartResearch={handleStartResearch}
+                    onToggleDeepResearchMode={handleToggleDeepResearchMode}
+                    onStop={handleStop}
+                  />
+
+                  <div className="mx-auto mt-7 flex max-w-[600px] flex-wrap items-center justify-center gap-2">
+                    {STARTER_PROMPTS.map(({ label, prompt, Icon }) => (
+                      <button
+                        key={label}
+                        type="button"
+                        disabled={!canUseWorkspace}
+                        onClick={() => handleStarterPrompt(prompt)}
+                        className="group inline-flex h-9 items-center gap-2 rounded-full border border-border bg-card/70 px-3 text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/25 hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                      >
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors group-hover:text-foreground">
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
@@ -1010,23 +1079,26 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-background via-background/95 to-transparent px-4 pb-3 pt-12">
-          <SearchForm
-            query={localQuery}
-            isLoading={isLoading}
-            isPlanning={isPlanning}
-            hasPlan={Boolean(activePlan)}
-            isDeepResearchMode={isDeepResearchMode}
-            onQueryChange={handleQueryChange}
-            onCreatePlan={handleCreatePlan}
-            onStartResearch={handleStartResearch}
-            onToggleDeepResearchMode={handleToggleDeepResearchMode}
-            onStop={handleStop}
-          />
-          <p className="mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground">
-            deepresearch can make mistakes. Check important info.
-          </p>
-        </div>
+        {hasConversation && (
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-background via-background/95 to-transparent px-4 pb-3 pt-12">
+            <SearchForm
+              query={localQuery}
+              isLoading={isLoading}
+              isPlanning={isPlanning}
+              isDisabled={!canUseWorkspace}
+              hasPlan={Boolean(activePlan)}
+              isDeepResearchMode={isDeepResearchMode}
+              onQueryChange={handleQueryChange}
+              onCreatePlan={handleCreatePlan}
+              onStartResearch={handleStartResearch}
+              onToggleDeepResearchMode={handleToggleDeepResearchMode}
+              onStop={handleStop}
+            />
+            <p className="mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground">
+              deepresearch can make mistakes. Check important info.
+            </p>
+          </div>
+        )}
       </main>
 
       {sidebarResult && <ReportSidebar result={sidebarResult} />}

@@ -143,6 +143,49 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(agent_messages[1]["tool_call_id"], agent_messages[0]["tool_calls"][0]["id"])
         self.assertIn("Example Source", agent_messages[1]["content"])
 
+    def test_stream_execution_is_driven_by_langgraph(self):
+        from agents import research_stream
+
+        class FakeGraph:
+            called = False
+
+            async def astream(self, state, stream_mode=None):
+                self.called = True
+                self.state = dict(state)
+                self.stream_mode = stream_mode
+                yield {
+                    "classify_intent": {
+                        "intent": "direct_answer",
+                        "reason": "test route",
+                    }
+                }
+                yield {
+                    "answer_direct": {
+                        "answer": "LangGraph handled this.",
+                        "result_type": "answer",
+                        "report_completed": True,
+                    }
+                }
+
+        fake_graph = FakeGraph()
+
+        with (
+            patch.object(research_stream, "research_agent", fake_graph, create=True),
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                side_effect=AssertionError("stream should use LangGraph, not the manual router"),
+            ),
+        ):
+            events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
+
+        self.assertTrue(fake_graph.called)
+        self.assertEqual(fake_graph.stream_mode, "updates")
+        complete_payload = json.loads(
+            [event for event in events if event.startswith("event: complete")][0].split("data: ", 1)[1]
+        )
+        self.assertEqual(complete_payload["answer"], "LangGraph handled this.")
+
     def test_stream_resolves_follow_up_before_routing_and_search(self):
         from agents import research_stream
 
