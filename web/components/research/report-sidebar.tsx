@@ -47,7 +47,7 @@ export function ReportSidebar({ result }: ReportSidebarProps) {
 
   return (
     <aside
-      className="relative hidden h-dvh shrink-0 border-l border-border bg-muted/35 xl:flex xl:flex-col"
+      className="animate-report-sidebar-in relative hidden h-dvh shrink-0 border-l border-border bg-muted/35 xl:flex xl:flex-col"
       style={{ width: sidebarWidth.width }}
     >
       <div
