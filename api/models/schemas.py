@@ -72,6 +72,25 @@ class ResearchMemoryResponse(BaseModel):
     updated_at: str
 
 
+class AgentSkillResponse(BaseModel):
+    name: str
+    description: str = ""
+    content: str = ""
+    allowed_tools: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class AgentSkillUpsertRequest(BaseModel):
+    description: str = Field(default="", max_length=1000)
+    content: str = Field(..., min_length=1, max_length=20000)
+    allowed_tools: list[str] = Field(default_factory=list, max_length=20)
+    enabled: Optional[bool] = None
+
+
+class AgentSkillEnabledUpdate(BaseModel):
+    enabled: bool
+
+
 class DocumentResponse(BaseModel):
     id: int
     content: str

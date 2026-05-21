@@ -81,6 +81,21 @@ export interface ResearchThreadUpdate {
   messages: unknown[];
 }
 
+export interface AgentSkill {
+  name: string;
+  description: string;
+  content: string;
+  allowed_tools: string[];
+  enabled: boolean;
+}
+
+export interface AgentSkillUpsertRequest {
+  description: string;
+  content: string;
+  allowed_tools: string[];
+  enabled?: boolean | null;
+}
+
 export interface ResearchStreamMetadata {
   run_id: string;
 }

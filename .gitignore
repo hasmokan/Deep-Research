@@ -39,6 +39,7 @@ yarn-error.log*
 
 # Local research run event storage
 api/data/
+api/skills/.skill-state.json
 
 # Testing
 coverage/

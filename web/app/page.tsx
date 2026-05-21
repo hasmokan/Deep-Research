@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, LogOut, MoreHorizontal, Share, Sparkles } from 'lucide-react';
+import { CheckCircle2, LogOut, MoreHorizontal, Share, Sparkles, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { LoginScreen } from '@/components/auth/login-screen';
@@ -13,6 +13,7 @@ import { ChatSidebar } from '@/components/layouts/chat-sidebar';
 import { ErrorState, LoadingState, ReportSidebar, ResultsDisplay, SearchForm } from '@/components/research';
 import { MarkdownContent } from '@/components/research/markdown-content';
 import { ResearchPlanPanel } from '@/components/research/research-plan-panel';
+import { SkillManagerPanel } from '@/components/research/skill-manager-panel';
 import { apiClient } from '@/lib/api';
 import type { ResearchResult } from '@/lib/api/types';
 import { getSupabaseClient, isSupabaseAuthConfigured, signInWithGoogle } from '@/lib/auth/supabase';
@@ -160,6 +161,7 @@ export default function Home() {
   const [isSigningIn, setSigningIn] = useState(false);
   const [isPlanning, setPlanning] = useState(false);
   const [isDeepResearchMode, setDeepResearchMode] = useState(true);
+  const [isSkillManagerOpen, setSkillManagerOpen] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const recoveryAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
@@ -924,6 +926,15 @@ export default function Home() {
             </Button>
             <ThemeToggle />
             <Button
+              type="button"
+              variant="ghost"
+              className="h-9 rounded-full px-3"
+              onClick={() => setSkillManagerOpen(true)}
+            >
+              <Wrench className="h-4 w-4" />
+              <span className="hidden sm:inline">Skills</span>
+            </Button>
+            <Button
               variant="ghost"
               size="icon"
               className="h-9 w-9 rounded-full"
@@ -1031,6 +1042,7 @@ export default function Home() {
       </main>
 
       {sidebarResult && <ReportSidebar result={sidebarResult} />}
+      <SkillManagerPanel open={isSkillManagerOpen} onClose={() => setSkillManagerOpen(false)} />
     </div>
   );
 }

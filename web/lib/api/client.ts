@@ -3,6 +3,8 @@
  */
 
 import type {
+  AgentSkill,
+  AgentSkillUpsertRequest,
   Document,
   ResearchPlanStreamHandlers,
   ResearchPlanResponse,
@@ -172,6 +174,30 @@ export class ApiClient {
     return this.request<ResearchThread>(`/api/research/threads/${encodeURIComponent(threadId)}`, {
       method: 'PUT',
       body: JSON.stringify(thread),
+    });
+  }
+
+  async listAgentSkills(): Promise<AgentSkill[]> {
+    return this.request<AgentSkill[]>('/api/skills');
+  }
+
+  async upsertAgentSkill(name: string, skill: AgentSkillUpsertRequest): Promise<AgentSkill> {
+    return this.request<AgentSkill>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(skill),
+    });
+  }
+
+  async setAgentSkillEnabled(name: string, enabled: boolean): Promise<AgentSkill> {
+    return this.request<AgentSkill>(`/api/skills/${encodeURIComponent(name)}/enabled`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
+  async deleteAgentSkill(name: string): Promise<{ deleted: boolean; name: string }> {
+    return this.request<{ deleted: boolean; name: string }>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
     });
   }
 

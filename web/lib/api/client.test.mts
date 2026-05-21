@@ -90,6 +90,77 @@ test('request methods send the current bearer token', async () => {
   }
 });
 
+test('skill management methods call the skill endpoints', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method: string; body?: string | null }> = [];
+
+  globalThis.fetch = async (url, init) => {
+    calls.push({
+      url: String(url),
+      method: init?.method ?? 'GET',
+      body: init?.body?.toString() ?? null,
+    });
+
+    if (String(url).endsWith('/api/skills') && (!init?.method || init.method === 'GET')) {
+      return Response.json([
+        {
+          name: 'identity-research',
+          description: 'Identity guidance.',
+          content: 'Ask for clarification when ambiguous.',
+          allowed_tools: ['web_search'],
+          enabled: true,
+        },
+      ]);
+    }
+
+    if (init?.method === 'DELETE') {
+      return Response.json({ deleted: true });
+    }
+
+    return Response.json({
+      name: 'identity-research',
+      description: 'Identity guidance.',
+      content: 'Ask for clarification when ambiguous.',
+      allowed_tools: ['web_search'],
+      enabled: String(url).endsWith('/enabled') ? false : true,
+    });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+
+    await client.listAgentSkills();
+    await client.upsertAgentSkill('identity-research', {
+      description: 'Identity guidance.',
+      content: 'Ask for clarification when ambiguous.',
+      allowed_tools: ['web_search'],
+    });
+    await client.setAgentSkillEnabled('identity-research', false);
+    await client.deleteAgentSkill('identity-research');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(calls, [
+    { url: 'http://api.test/api/skills', method: 'GET', body: null },
+    {
+      url: 'http://api.test/api/skills/identity-research',
+      method: 'PUT',
+      body: JSON.stringify({
+        description: 'Identity guidance.',
+        content: 'Ask for clarification when ambiguous.',
+        allowed_tools: ['web_search'],
+      }),
+    },
+    {
+      url: 'http://api.test/api/skills/identity-research/enabled',
+      method: 'PATCH',
+      body: JSON.stringify({ enabled: false }),
+    },
+    { url: 'http://api.test/api/skills/identity-research', method: 'DELETE', body: null },
+  ]);
+});
+
 test('stream methods send the current bearer token', async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();

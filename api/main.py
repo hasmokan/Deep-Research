@@ -5,7 +5,7 @@ import os
 
 load_dotenv()
 
-from routers import research
+from routers import research, skills
 from services.langfuse_observability import get_langfuse_tracer
 
 app = FastAPI(
@@ -29,6 +29,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(research.router)
+app.include_router(skills.router)
 
 @app.get("/")
 async def root():
