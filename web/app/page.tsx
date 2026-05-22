@@ -10,8 +10,9 @@ import {
   CheckCircle2,
   Compass,
   FlaskConical,
+  FileText,
   LogOut,
-  SearchCheck,
+  Menu,
   Sparkles,
   type LucideIcon,
 } from 'lucide-react';
@@ -194,6 +195,8 @@ export default function Home() {
   const [isSigningIn, setSigningIn] = useState(false);
   const [isPlanning, setPlanning] = useState(false);
   const [isDeepResearchMode, setDeepResearchMode] = useState(true);
+  const [isMobileChatOpen, setMobileChatOpen] = useState(false);
+  const [isMobileReportOpen, setMobileReportOpen] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const recoveryAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
@@ -949,15 +952,34 @@ export default function Home() {
       <main className="relative flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
         <header className="z-40 flex h-12 shrink-0 items-center justify-between border-b border-border/60 bg-background/90 px-4 backdrop-blur-xl lg:px-5">
           <div className="flex items-center gap-2 lg:hidden">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background">
-              <SearchCheck className="h-4 w-4" />
-            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 rounded-lg"
+              aria-label="Open chats"
+              onClick={() => setMobileChatOpen(true)}
+            >
+              <Menu className="h-4 w-4" />
+            </Button>
             <span className="text-base font-semibold">DeepResearch</span>
           </div>
           <div className="hidden lg:block" />
           <div className="flex min-w-0 items-center gap-2">
             {authSession && (
               <>
+                {sidebarResult && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 rounded-lg xl:hidden"
+                    aria-label="Open report"
+                    onClick={() => setMobileReportOpen(true)}
+                  >
+                    <FileText className="h-4 w-4" />
+                  </Button>
+                )}
                 <span className="hidden max-w-[240px] truncate text-sm text-muted-foreground md:inline">
                   {authSession.user.email}
                 </span>
@@ -1102,6 +1124,47 @@ export default function Home() {
       </main>
 
       {sidebarResult && <ReportSidebar result={sidebarResult} />}
+
+      {isMobileChatOpen && (
+        <div className="fixed inset-0 z-50 flex lg:hidden" role="dialog" aria-modal="true" aria-label="Chat history">
+          <button
+            type="button"
+            className="absolute inset-0 bg-background/70 backdrop-blur-sm"
+            aria-label="Close chats"
+            onClick={() => setMobileChatOpen(false)}
+          />
+          <div className="animate-chat-sidebar-in relative z-10">
+            <ChatSidebar
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              isDisabled={!canUseWorkspace}
+              isPending={isWorkspacePending}
+              variant="drawer"
+              onClose={() => setMobileChatOpen(false)}
+              onNewChat={handleNewChat}
+              onSelectSession={handleSelectSession}
+            />
+          </div>
+        </div>
+      )}
+
+      {sidebarResult && isMobileReportOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end xl:hidden" role="dialog" aria-modal="true" aria-label="Research report">
+          <button
+            type="button"
+            className="absolute inset-0 bg-background/70 backdrop-blur-sm"
+            aria-label="Close report"
+            onClick={() => setMobileReportOpen(false)}
+          />
+          <div className="relative z-10">
+            <ReportSidebar
+              result={sidebarResult}
+              variant="drawer"
+              onClose={() => setMobileReportOpen(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

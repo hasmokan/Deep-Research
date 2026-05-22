@@ -467,6 +467,22 @@
     will-change: transform, opacity;
   }
 
+  @keyframes chat-sidebar-in {
+    0% {
+      transform: translateX(-100%);
+      opacity: 0;
+    }
+    100% {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  .animate-chat-sidebar-in {
+    animation: chat-sidebar-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
+  }
+
   .agent-active-row {
     position: relative;
     overflow: hidden;
@@ -543,6 +559,7 @@
     .animate-agent-cursor,
     .animate-agent-dot,
     .animate-report-sidebar-in,
+    .animate-chat-sidebar-in,
     .thinking-scan::before,
     .agent-active-row::before,
     .skeleton {

@@ -4,7 +4,7 @@
  * Right-side report artifact panel for completed research.
  */
 
-import { CheckCircle2, Download, ExternalLink, FileText, Maximize2 } from 'lucide-react';
+import { CheckCircle2, Download, ExternalLink, FileText, Maximize2, X } from 'lucide-react';
 import type { Document, ResearchResult } from '@/lib/api/types';
 import { Button } from '@/components/ui/button';
 import { useResizablePanel } from '@/lib/research/resizable-panels';
@@ -12,6 +12,8 @@ import { MarkdownContent } from './markdown-content';
 
 interface ReportSidebarProps {
   result: ResearchResult;
+  variant?: 'desktop' | 'drawer';
+  onClose?: () => void;
 }
 
 const REPORT_SIDEBAR_WIDTH = {
@@ -37,7 +39,7 @@ function getDocumentUrl(document: Document) {
   return typeof url === 'string' && url.startsWith('http') ? url : null;
 }
 
-export function ReportSidebar({ result }: ReportSidebarProps) {
+export function ReportSidebar({ result, variant = 'desktop', onClose }: ReportSidebarProps) {
   const hasDocuments = result.documents && result.documents.length > 0;
   const sidebarWidth = useResizablePanel({
     defaultWidth: REPORT_SIDEBAR_WIDTH.defaultWidth,
@@ -47,8 +49,10 @@ export function ReportSidebar({ result }: ReportSidebarProps) {
 
   return (
     <aside
-      className="animate-report-sidebar-in relative hidden h-dvh shrink-0 border-l border-border bg-muted/35 xl:flex xl:flex-col"
-      style={{ width: sidebarWidth.width }}
+      className={`animate-report-sidebar-in relative h-dvh shrink-0 border-l border-border bg-muted/35 ${
+        variant === 'drawer' ? 'flex w-[min(92vw,520px)] flex-col' : 'hidden xl:flex xl:flex-col'
+      }`}
+      style={variant === 'desktop' ? { width: sidebarWidth.width } : undefined}
     >
       <div
         role="separator"
@@ -58,7 +62,9 @@ export function ReportSidebar({ result }: ReportSidebarProps) {
         aria-valuemax={REPORT_SIDEBAR_WIDTH.constraints.max}
         aria-valuenow={sidebarWidth.width}
         tabIndex={0}
-        className="absolute -left-1 top-0 z-50 hidden h-full w-2 cursor-col-resize touch-none outline-none transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/15 xl:block"
+        className={`absolute -left-1 top-0 z-50 h-full w-2 cursor-col-resize touch-none outline-none transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/15 ${
+          variant === 'desktop' ? 'hidden xl:block' : 'hidden'
+        }`}
         onMouseDown={sidebarWidth.startResize}
         onKeyDown={(event) => {
           if (event.key === 'ArrowLeft') {
@@ -85,6 +91,17 @@ export function ReportSidebar({ result }: ReportSidebarProps) {
           <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" aria-label="Export report">
             <Download className="h-4 w-4" />
           </Button>
+          {variant === 'drawer' && onClose && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 rounded-full"
+              aria-label="Close report"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </header>
 
