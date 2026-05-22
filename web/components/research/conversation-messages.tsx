@@ -33,6 +33,30 @@ export function ThinkingDots() {
   );
 }
 
+function RollingTokenNumber({
+  minWidthCh = 2.6,
+  prefix = '',
+  value,
+}: {
+  minWidthCh?: number;
+  prefix?: string;
+  value: number;
+}) {
+  const formatted = `${prefix}${formatTokenCount(value)}`;
+
+  return (
+    <span
+      className="token-usage-number"
+      style={{ minWidth: `${minWidthCh}ch` }}
+      aria-label={formatted}
+    >
+      <span key={formatted} className="token-usage-number-current">
+        {formatted}
+      </span>
+    </span>
+  );
+}
+
 function ConversationTokenUsageBadge({ message }: { message: ConversationMessage }) {
   const visibleUsage = getVisibleTokenUsage(
     message.result?.token_usage ?? message.researchActivity?.tokenUsage,
@@ -52,29 +76,30 @@ function ConversationTokenUsageBadge({ message }: { message: ConversationMessage
   ].join(' / ');
 
   return (
-    <div className="mt-2 flex justify-end">
+    <div className="mt-1.5 ml-9 flex justify-start">
       <div
         aria-live="polite"
         aria-label={isEstimated ? 'Estimated token usage' : 'Token usage'}
+        aria-atomic="false"
         title={title}
-        className="inline-flex max-w-full items-center gap-2 rounded-[8px] border border-border/70 bg-background/90 px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-sm"
+        className="inline-flex max-w-full items-center gap-1.5 text-[10px] leading-4 text-muted-foreground/65"
       >
-        <Gauge className={`h-3.5 w-3.5 shrink-0 ${isEstimated ? 'animate-pulse' : ''}`} />
-        <span className="font-medium text-foreground/80">
-          {isEstimated ? 'Estimated' : 'Tokens'}
+        <Gauge className={`h-3 w-3 shrink-0 opacity-60 ${isEstimated ? 'animate-pulse' : ''}`} />
+        <span className="font-medium text-muted-foreground/80">
+          {isEstimated ? 'estimated' : 'tokens'}
         </span>
-        <span className="font-mono text-foreground tabular-nums">
-          {isEstimated ? '~' : ''}{formatTokenCount(usage.total_tokens)}
+        <span className="font-mono text-foreground/70 tabular-nums">
+          <RollingTokenNumber minWidthCh={5.4} prefix={isEstimated ? '~' : ''} value={usage.total_tokens} />
         </span>
-        <span className="hidden h-3.5 w-px bg-border/80 sm:inline-block" />
-        <span className="hidden items-center gap-1.5 sm:inline-flex">
-          <span>Input</span>
-          <span className="font-mono text-foreground/80 tabular-nums">
-            {formatTokenCount(usage.input_tokens)}
+        <span className="hidden text-muted-foreground/35 sm:inline">/</span>
+        <span className="hidden items-center gap-1 sm:inline-flex">
+          <span>in</span>
+          <span className="font-mono text-foreground/60 tabular-nums">
+            <RollingTokenNumber minWidthCh={4.6} value={usage.input_tokens} />
           </span>
-          <span>Output</span>
-          <span className="font-mono text-foreground/80 tabular-nums">
-            {formatTokenCount(usage.output_tokens)}
+          <span>out</span>
+          <span className="font-mono text-foreground/60 tabular-nums">
+            <RollingTokenNumber minWidthCh={4.6} value={usage.output_tokens} />
           </span>
         </span>
       </div>

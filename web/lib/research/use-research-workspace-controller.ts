@@ -1,25 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { ResearchWorkspaceViewProps } from '@/components/research/research-workspace-view';
 import { apiClient } from '@/lib/api';
 import { getSupabaseClient, isSupabaseAuthConfigured, signInWithGoogle } from '@/lib/auth/supabase';
 import {
-  appendAssistantAnswerDelta,
-  appendResearchActivityAgentMessage,
-  appendResearchActivityDocuments,
   appendResearchActivityEstimatedTokenUsage,
-  appendResearchActivityStatus,
-  appendResearchActivityThinking,
-  appendResearchActivityTokenUsage,
-  appendResearchActivityTrace,
-  applyResearchRunToActivityMessage,
   buildResearchRequestMessages,
   completeResearchActivityMessage,
   createAssistantResearchActivityMessage,
   createUserMessage,
   setResearchActivityRunMetadata,
-  type ConversationMessage,
   updateResearchActivityMessageStatus,
 } from '@/lib/research/conversation';
 import {
@@ -27,10 +18,15 @@ import {
   hasErrorDiagnostic,
   type ErrorDiagnostic,
 } from '@/lib/research/error-diagnostics';
+import { useClientErrorReporting } from '@/lib/research/use-client-error-reporting';
+import { useConversationAutoscroll } from '@/lib/research/use-conversation-autoscroll';
+import { useResearchRunRecovery } from '@/lib/research/use-research-run-recovery';
+import { useResearchSessionMessages } from '@/lib/research/use-research-session-messages';
 import {
   getLatestArtifactResult,
   isReportResult,
 } from '@/lib/research/result-selectors';
+import { createResearchStreamHandlers } from '@/lib/research/research-stream-handlers';
 import {
   getResearchQueryOverride,
   normalizeResearchPlan,
@@ -40,14 +36,9 @@ import {
 import {
   createResearchSession,
   researchThreadUpdateFromSession,
-  updateResearchSessionMessages,
   upsertResearchSession,
   type ResearchSession,
 } from '@/lib/research/sessions';
-import {
-  getAgentMessageTokenEstimate,
-  getDocumentsTokenEstimate,
-} from '@/lib/research/token-estimates';
 import type { TokenUsageDirection } from '@/lib/research/token-usage';
 import { useAuthenticatedResearchSessions } from '@/lib/research/use-authenticated-research-sessions';
 import { useResearchStore } from '@/lib/store/research';
@@ -170,171 +161,40 @@ export function useResearchWorkspaceController() {
       ].join(':');
     })
     .join('|');
-
-  useEffect(() => {
-    if (!hasConversation) {
-      return;
-    }
-
-    window.requestAnimationFrame(() => {
-      const scrollContainer = conversationScrollRef.current;
-      if (!scrollContainer) {
-        conversationEndRef.current?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'end',
-        });
-        return;
-      }
-
-      scrollContainer.scrollTo({
-        top: scrollContainer.scrollHeight,
-        behavior: 'smooth',
-      });
-    });
-  }, [
-    hasConversation,
+  const conversationScrollSignature = [
     messages.length,
     streamingActivitySignature,
-    researchPlan,
+    researchPlan?.query ?? '',
     isPlanning,
     isLoading,
-    error,
-    result,
-  ]);
+    error ?? '',
+    result?.query ?? '',
+    result?.status ?? '',
+  ].join('|');
 
-  useEffect(() => {
-    const reportClientError = (
-      message: string,
-      source: string,
-      context: Record<string, unknown> = {},
-    ) => {
-      void apiClient.reportClientError({
-        message,
-        source,
-        level: 'error',
-        context: {
-          active_session_id: activeSessionIdRef.current,
-          ...context,
-        },
-      });
-    };
+  useConversationAutoscroll({
+    conversationEndRef,
+    conversationScrollRef,
+    isEnabled: hasConversation,
+    scrollSignature: conversationScrollSignature,
+  });
+  useClientErrorReporting({ activeSessionIdRef });
 
-    const handleWindowError = (event: ErrorEvent) => {
-      reportClientError(
-        event.error instanceof Error ? event.error.message : event.message || 'Unhandled browser error',
-        'window.onerror',
-        {
-          filename: event.filename,
-          lineno: event.lineno,
-          colno: event.colno,
-        },
-      );
-    };
-
-    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-      const reason = event.reason;
-      reportClientError(
-        reason instanceof Error ? reason.message : String(reason || 'Unhandled promise rejection'),
-        'unhandledrejection',
-      );
-    };
-
-    window.addEventListener('error', handleWindowError);
-    window.addEventListener('unhandledrejection', handleUnhandledRejection);
-
-    return () => {
-      window.removeEventListener('error', handleWindowError);
-      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
-    };
-  }, [activeSessionIdRef]);
-
-  const persistMessagesToSession = useCallback((sessionId: string, nextMessages: ConversationMessage[]) => {
-    const existingSession = sessionsRef.current.find((session) => session.id === sessionId);
-    const session = existingSession ?? createResearchSession({ id: sessionId });
-    const updatedSession = updateResearchSessionMessages(session, nextMessages);
-    const nextSessions = upsertResearchSession(
-      {
-        activeSessionId: activeSessionIdRef.current,
-        sessions: sessionsRef.current,
-      },
-      updatedSession,
-    ).sessions;
-
-    sessionsRef.current = nextSessions;
-    setSessions(nextSessions);
-    saveAuthenticatedSessionSnapshot(nextSessions, activeSessionIdRef.current);
-    void apiClient.saveResearchThread(updatedSession.id, researchThreadUpdateFromSession(updatedSession))
-      .catch((saveError) => {
-        const requestId = getRequestIdFromError(saveError);
-        setErrorDiagnostic(requestId ? { requestId } : null);
-        setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
-      });
-  }, [activeSessionIdRef, saveAuthenticatedSessionSnapshot, sessionsRef, setError, setSessions]);
-
-  const saveActiveSessionMessages = (nextMessages: ConversationMessage[]) => {
-    if (!activeSessionIdRef.current && nextMessages.length === 0) {
-      return null;
-    }
-
-    const existingSession = sessionsRef.current.find((session) => session.id === activeSessionIdRef.current);
-    const session = existingSession ?? createResearchSession();
-    const updatedSession = updateResearchSessionMessages(session, nextMessages);
-    const nextSessions = upsertResearchSession(
-      {
-        activeSessionId: updatedSession.id,
-        sessions: sessionsRef.current,
-      },
-      updatedSession,
-    ).sessions;
-
-    activeSessionIdRef.current = updatedSession.id;
-    sessionsRef.current = nextSessions;
-    setActiveSessionId(updatedSession.id);
-    setSessions(nextSessions);
-    saveAuthenticatedSessionSnapshot(nextSessions, updatedSession.id);
-    void apiClient.saveResearchThread(updatedSession.id, researchThreadUpdateFromSession(updatedSession))
-      .catch((saveError) => {
-        const requestId = getRequestIdFromError(saveError);
-        setErrorDiagnostic(requestId ? { requestId } : null);
-        setError(saveError instanceof Error ? saveError.message : 'Unable to save this research session');
-      });
-
-    return updatedSession.id;
-  };
-
-  const commitVisibleMessages = (
-    nextMessages: ConversationMessage[],
-    sessionId: string | null = activeSessionIdRef.current,
-  ) => {
-    messagesRef.current = nextMessages;
-    setMessages(nextMessages);
-
-    if (sessionId) {
-      persistMessagesToSession(sessionId, nextMessages);
-    } else {
-      saveActiveSessionMessages(nextMessages);
-    }
-  };
-
-  const updateResearchActivityMessage = useCallback((
-    sessionId: string,
-    messageId: string,
-    updateMessage: (message: ConversationMessage) => ConversationMessage,
-  ) => {
-    const sourceMessages = activeSessionIdRef.current === sessionId
-      ? messagesRef.current
-      : sessionsRef.current.find((session) => session.id === sessionId)?.messages ?? [];
-    const nextMessages = sourceMessages.map((message) => (
-      message.id === messageId ? updateMessage(message) : message
-    ));
-
-    if (activeSessionIdRef.current === sessionId) {
-      messagesRef.current = nextMessages;
-      setMessages(nextMessages);
-    }
-
-    persistMessagesToSession(sessionId, nextMessages);
-  }, [activeSessionIdRef, messagesRef, persistMessagesToSession, sessionsRef, setMessages]);
+  const {
+    commitVisibleMessages,
+    saveActiveSessionMessages,
+    updateResearchActivityMessage,
+  } = useResearchSessionMessages({
+    activeSessionIdRef,
+    messagesRef,
+    saveAuthenticatedSessionSnapshot,
+    sessionsRef,
+    setActiveSessionId,
+    setError,
+    setErrorDiagnostic,
+    setMessages,
+    setSessions,
+  });
 
   const addEstimatedTokenUsage = useCallback((
     sessionId: string,
@@ -367,176 +227,24 @@ export function useResearchWorkspaceController() {
     setErrorDiagnostic(hasErrorDiagnostic(diagnostic) ? diagnostic : null);
   }, [setError]);
 
-  useEffect(() => {
-    if (!hasLoadedSessions) {
-      return;
-    }
-
-    const pendingActivities = sessionsRef.current.flatMap((session) => (
-      session.messages
-        .filter((message) => (
-          message.researchActivity?.status === 'running' && message.researchActivity.runId
-        ))
-        .map((message) => ({
-          sessionId: session.id,
-          messageId: message.id,
-          runId: message.researchActivity?.runId ?? '',
-        }))
-    ));
-
-    if (!pendingActivities.length) {
-      return;
-    }
-
-    void Promise.all(pendingActivities.map(async (activity) => {
-      if (recoveryAbortControllersRef.current.has(activity.runId)) {
-        return;
-      }
-
-      const abortController = new AbortController();
-      recoveryAbortControllersRef.current.set(activity.runId, abortController);
-      const isActiveActivity = activeSessionIdRef.current === activity.sessionId;
-
-      try {
-        const run = await apiClient.getResearchRun(activity.runId);
-        updateResearchActivityMessage(
-          activity.sessionId,
-          activity.messageId,
-          (message) => applyResearchRunToActivityMessage(message, run),
-        );
-
-        if (run.status !== 'running') {
-          return;
-        }
-
-        if (isActiveActivity) {
-          setLoading(true);
-        }
-        addEstimatedTokenUsage(activity.sessionId, activity.messageId, run.query, 'input');
-
-        const afterSeq = run.events.at(-1)?.seq ?? 0;
-        const researchResult = await apiClient.streamResearchRun(
-          activity.runId,
-          {
-            afterSeq,
-            onStatus: (status) => {
-              addStreamStatus(status);
-              updateResearchActivityMessage(
-                activity.sessionId,
-                activity.messageId,
-                (message) => appendResearchActivityStatus(message, status),
-              );
-            },
-            onTrace: (trace) => {
-              addStreamTrace(trace);
-              addEstimatedTokenUsage(
-                activity.sessionId,
-                activity.messageId,
-                `${trace.title}\n${trace.detail}`,
-                trace.kind === 'tool_result' ? 'input' : 'output',
-              );
-              updateResearchActivityMessage(
-                activity.sessionId,
-                activity.messageId,
-                (message) => appendResearchActivityTrace(message, trace),
-              );
-            },
-            onAgentMessage: (agentMessage) => {
-              addStreamAgentMessage(agentMessage);
-              const estimate = getAgentMessageTokenEstimate(agentMessage);
-              if (estimate) {
-                addEstimatedTokenUsage(activity.sessionId, activity.messageId, estimate.text, estimate.direction);
-              }
-              updateResearchActivityMessage(
-                activity.sessionId,
-                activity.messageId,
-                (message) => appendResearchActivityAgentMessage(message, agentMessage),
-              );
-            },
-            onDocuments: (documents) => {
-              setStreamDocuments(documents);
-              addEstimatedTokenUsage(
-                activity.sessionId,
-                activity.messageId,
-                getDocumentsTokenEstimate(documents),
-                'input',
-              );
-              updateResearchActivityMessage(
-                activity.sessionId,
-                activity.messageId,
-                (message) => appendResearchActivityDocuments(message, documents),
-              );
-            },
-            onThinking: (thinking) => {
-              addStreamThinking(thinking);
-              addEstimatedTokenUsage(activity.sessionId, activity.messageId, thinking.text, 'output');
-              updateResearchActivityMessage(
-                activity.sessionId,
-                activity.messageId,
-                (message) => appendResearchActivityThinking(message, thinking),
-              );
-            },
-            onAnswerDelta: (delta) => {
-              addEstimatedTokenUsage(activity.sessionId, activity.messageId, delta, 'output');
-              updateResearchActivityMessage(
-                activity.sessionId,
-                activity.messageId,
-                (message) => appendAssistantAnswerDelta(message, delta),
-              );
-            },
-            onTokenUsage: (tokenUsage) => {
-              setStreamTokenUsage(tokenUsage);
-              updateResearchActivityMessage(
-                activity.sessionId,
-                activity.messageId,
-                (message) => appendResearchActivityTokenUsage(message, tokenUsage),
-              );
-            },
-            signal: abortController.signal,
-          },
-        );
-
-        updateResearchActivityMessage(
-          activity.sessionId,
-          activity.messageId,
-          (message) => completeResearchActivityMessage(message, researchResult),
-        );
-        if (isActiveActivity) {
-          setDismissedSidebarQuery(null);
-          setResult(researchResult);
-          setDeepResearchMode(false);
-        }
-      } catch {
-        if (abortController.signal.aborted) {
-          return;
-        }
-        updateResearchActivityMessage(
-          activity.sessionId,
-          activity.messageId,
-          (message) => updateResearchActivityMessageStatus(message, 'stopped'),
-        );
-      } finally {
-        recoveryAbortControllersRef.current.delete(activity.runId);
-        if (isActiveActivity) {
-          setLoading(false);
-        }
-      }
-    }));
-  }, [
+  useResearchRunRecovery({
+    activeSessionIdRef,
+    addEstimatedTokenUsage,
     addStreamAgentMessage,
     addStreamStatus,
     addStreamThinking,
     addStreamTrace,
-    addEstimatedTokenUsage,
-    activeSessionIdRef,
     hasLoadedSessions,
+    recoveryAbortControllersRef,
+    sessionsRef,
+    setDeepResearchMode,
+    setDismissedSidebarQuery,
     setLoading,
     setResult,
     setStreamDocuments,
     setStreamTokenUsage,
-    sessionsRef,
     updateResearchActivityMessage,
-  ]);
+  });
 
   const activateSession = (session: ResearchSession) => {
     abortControllerRef.current?.abort();
@@ -759,6 +467,31 @@ export function useResearchWorkspaceController() {
       resetStream();
       addEstimatedTokenUsage(runSessionId, activityMessage.id, researchQuery, 'input');
 
+      const streamHandlers = createResearchStreamHandlers({
+        sessionId: runSessionId,
+        messageId: activityMessage.id,
+        addEstimatedTokenUsage,
+        addStreamAgentMessage,
+        addStreamStatus,
+        addStreamThinking,
+        addStreamTrace,
+        onMetadata: (metadata) => {
+          activeResearchRef.current = {
+            sessionId: runSessionId,
+            messageId: activityMessage.id,
+            runId: metadata.run_id,
+            traceId: metadata.trace_id ?? null,
+          };
+          updateResearchActivityMessage(
+            runSessionId,
+            activityMessage.id,
+            (message) => setResearchActivityRunMetadata(message, metadata),
+          );
+        },
+        setStreamDocuments,
+        setStreamTokenUsage,
+        updateResearchActivityMessage,
+      });
       const researchResult = await apiClient.streamResearch(
         {
           query: researchQuery,
@@ -768,92 +501,7 @@ export function useResearchWorkspaceController() {
           latest_result: latestResultForFollowUp,
         },
         {
-          onMetadata: (metadata) => {
-            activeResearchRef.current = {
-              sessionId: runSessionId,
-              messageId: activityMessage.id,
-              runId: metadata.run_id,
-              traceId: metadata.trace_id ?? null,
-            };
-            updateResearchActivityMessage(
-              runSessionId,
-              activityMessage.id,
-              (message) => setResearchActivityRunMetadata(message, metadata),
-            );
-          },
-          onStatus: (status) => {
-            addStreamStatus(status);
-            updateResearchActivityMessage(
-              runSessionId,
-              activityMessage.id,
-              (message) => appendResearchActivityStatus(message, status),
-            );
-          },
-          onTrace: (trace) => {
-            addStreamTrace(trace);
-            addEstimatedTokenUsage(
-              runSessionId,
-              activityMessage.id,
-              `${trace.title}\n${trace.detail}`,
-              trace.kind === 'tool_result' ? 'input' : 'output',
-            );
-            updateResearchActivityMessage(
-              runSessionId,
-              activityMessage.id,
-              (message) => appendResearchActivityTrace(message, trace),
-            );
-          },
-          onAgentMessage: (agentMessage) => {
-            addStreamAgentMessage(agentMessage);
-            const estimate = getAgentMessageTokenEstimate(agentMessage);
-            if (estimate) {
-              addEstimatedTokenUsage(runSessionId, activityMessage.id, estimate.text, estimate.direction);
-            }
-            updateResearchActivityMessage(
-              runSessionId,
-              activityMessage.id,
-              (message) => appendResearchActivityAgentMessage(message, agentMessage),
-            );
-          },
-          onDocuments: (documents) => {
-            setStreamDocuments(documents);
-            addEstimatedTokenUsage(
-              runSessionId,
-              activityMessage.id,
-              getDocumentsTokenEstimate(documents),
-              'input',
-            );
-            updateResearchActivityMessage(
-              runSessionId,
-              activityMessage.id,
-              (message) => appendResearchActivityDocuments(message, documents),
-            );
-          },
-          onThinking: (thinking) => {
-            addStreamThinking(thinking);
-            addEstimatedTokenUsage(runSessionId, activityMessage.id, thinking.text, 'output');
-            updateResearchActivityMessage(
-              runSessionId,
-              activityMessage.id,
-              (message) => appendResearchActivityThinking(message, thinking),
-            );
-          },
-          onAnswerDelta: (delta) => {
-            addEstimatedTokenUsage(runSessionId, activityMessage.id, delta, 'output');
-            updateResearchActivityMessage(
-              runSessionId,
-              activityMessage.id,
-              (message) => appendAssistantAnswerDelta(message, delta),
-            );
-          },
-          onTokenUsage: (tokenUsage) => {
-            setStreamTokenUsage(tokenUsage);
-            updateResearchActivityMessage(
-              runSessionId,
-              activityMessage.id,
-              (message) => appendResearchActivityTokenUsage(message, tokenUsage),
-            );
-          },
+          ...streamHandlers,
           signal: abortController.signal,
         },
       ).catch((streamError) => {

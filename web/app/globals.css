@@ -461,20 +461,12 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .token-usage-number-current,
-  .token-usage-number-previous {
+  .token-usage-number-current {
     grid-area: 1 / 1;
     display: block;
     line-height: 1.1;
-    will-change: transform, opacity;
-  }
-
-  .token-usage-number-current {
     animation: token-usage-roll-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .token-usage-number-previous {
-    animation: token-usage-roll-out 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
   }
 
   @keyframes token-usage-roll-in {
@@ -485,17 +477,6 @@
     100% {
       transform: translateY(0);
       opacity: 1;
-    }
-  }
-
-  @keyframes token-usage-roll-out {
-    0% {
-      transform: translateY(0);
-      opacity: 0.55;
-    }
-    100% {
-      transform: translateY(85%);
-      opacity: 0;
     }
   }
 
@@ -609,7 +590,6 @@
     .animate-report-sidebar-in,
     .animate-chat-sidebar-in,
     .token-usage-number-current,
-    .token-usage-number-previous,
     .thinking-scan::before,
     .agent-active-row::before,
     .skeleton {
