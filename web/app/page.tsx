@@ -197,6 +197,7 @@ export default function Home() {
   const [isDeepResearchMode, setDeepResearchMode] = useState(true);
   const [isMobileChatOpen, setMobileChatOpen] = useState(false);
   const [isMobileReportOpen, setMobileReportOpen] = useState(false);
+  const [dismissedSidebarQuery, setDismissedSidebarQuery] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const recoveryAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
@@ -260,7 +261,7 @@ export default function Home() {
   const activePlan = researchPlan;
   const latestArtifactResult = getLatestArtifactResult(messages);
   const latestContextResult = (isReportResult(result) ? result : null) || latestArtifactResult;
-  const sidebarResult = latestContextResult;
+  const sidebarResult = latestContextResult?.query === dismissedSidebarQuery ? null : latestContextResult;
   const hasConversation = Boolean(messages.length || activePlan || isPlanning || isLoading || error);
   const activePlanActivityMessage = activePlan
     ? [...messages].reverse().find((message) => (
@@ -517,6 +518,7 @@ export default function Home() {
           (message) => completeResearchActivityMessage(message, researchResult),
         );
         if (isActiveActivity) {
+          setDismissedSidebarQuery(null);
           setResult(researchResult);
           setDeepResearchMode(false);
         }
@@ -624,6 +626,24 @@ export default function Home() {
     }
 
     handleQueryChange(prompt);
+  };
+
+  const handleCloseReportSidebar = () => {
+    if (sidebarResult) {
+      setDismissedSidebarQuery(sidebarResult.query);
+    }
+    setMobileReportOpen(false);
+  };
+
+  const handleExpandReport = () => {
+    if (!sidebarResult?.report) {
+      return;
+    }
+
+    const blob = new Blob([sidebarResult.report], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
 
   const handleCreatePlan = async () => {
@@ -824,6 +844,7 @@ export default function Home() {
         activityMessage.id,
         (message) => completeResearchActivityMessage(message, researchResult),
       );
+      setDismissedSidebarQuery(null);
       setResult(researchResult);
       setDeepResearchMode(false);
     } catch (researchError) {
@@ -1123,7 +1144,13 @@ export default function Home() {
         )}
       </main>
 
-      {sidebarResult && <ReportSidebar result={sidebarResult} />}
+      {sidebarResult && (
+        <ReportSidebar
+          result={sidebarResult}
+          onExpand={handleExpandReport}
+          onClose={handleCloseReportSidebar}
+        />
+      )}
 
       {isMobileChatOpen && (
         <div className="fixed inset-0 z-50 flex lg:hidden" role="dialog" aria-modal="true" aria-label="Chat history">
@@ -1160,6 +1187,7 @@ export default function Home() {
             <ReportSidebar
               result={sidebarResult}
               variant="drawer"
+              onExpand={handleExpandReport}
               onClose={() => setMobileReportOpen(false)}
             />
           </div>

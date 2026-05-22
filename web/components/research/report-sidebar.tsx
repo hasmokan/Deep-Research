@@ -13,6 +13,7 @@ import { MarkdownContent } from './markdown-content';
 interface ReportSidebarProps {
   result: ResearchResult;
   variant?: 'desktop' | 'drawer';
+  onExpand?: () => void;
   onClose?: () => void;
 }
 
@@ -39,7 +40,12 @@ function getDocumentUrl(document: Document) {
   return typeof url === 'string' && url.startsWith('http') ? url : null;
 }
 
-export function ReportSidebar({ result, variant = 'desktop', onClose }: ReportSidebarProps) {
+export function ReportSidebar({
+  result,
+  variant = 'desktop',
+  onExpand,
+  onClose,
+}: ReportSidebarProps) {
   const hasDocuments = result.documents && result.documents.length > 0;
   const sidebarWidth = useResizablePanel({
     defaultWidth: REPORT_SIDEBAR_WIDTH.defaultWidth,
@@ -85,13 +91,19 @@ export function ReportSidebar({ result, variant = 'desktop', onClose }: ReportSi
           <p className="mt-0.5 text-xs text-muted-foreground">Research report</p>
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" aria-label="Open report">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full"
+            aria-label="Expand report"
+            onClick={onExpand}
+          >
             <Maximize2 className="h-4 w-4" />
           </Button>
           <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" aria-label="Export report">
             <Download className="h-4 w-4" />
           </Button>
-          {variant === 'drawer' && onClose && (
+          {onClose && (
             <Button
               variant="ghost"
               size="icon"
