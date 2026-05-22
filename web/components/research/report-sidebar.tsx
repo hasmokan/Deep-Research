@@ -90,17 +90,24 @@ export function ReportSidebar({
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">Research report</p>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <Button
             variant="ghost"
             size="icon"
             className="h-8 w-8 rounded-full"
             aria-label="Expand report"
+            title="Expand report"
             onClick={onExpand}
           >
             <Maximize2 className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" aria-label="Export report">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full"
+            aria-label="Export report"
+            title="Export report"
+          >
             <Download className="h-4 w-4" />
           </Button>
           {onClose && (
@@ -109,6 +116,7 @@ export function ReportSidebar({
               size="icon"
               className="h-8 w-8 rounded-full"
               aria-label="Close report"
+              title="Close report"
               onClick={onClose}
             >
               <X className="h-4 w-4" />
