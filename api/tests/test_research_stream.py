@@ -170,7 +170,7 @@ class ResearchStreamTests(TestCase):
         fake_graph = FakeGraph()
 
         with (
-            patch.object(research_stream, "research_agent", fake_graph, create=True),
+            patch.object(research_stream, "_streaming_research_graph_override", fake_graph),
             patch.object(
                 research_stream,
                 "classify_research_intent_node",
@@ -482,11 +482,73 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(complete_payload["result_type"], "answer")
         self.assertEqual(complete_payload["status"], "completed")
 
+    def test_stream_emits_token_usage_events_and_complete_payload(self):
+        from agents import research_stream
+
+        async def fake_direct_answer_node(state):
+            yield {"type": "answer_delta", "delta": "Done"}
+            yield {
+                "type": "token_usage",
+                "id": "answer-llm",
+                "usage": {
+                    "input_tokens": 7,
+                    "output_tokens": 5,
+                    "total_tokens": 12,
+                },
+            }
+            yield {
+                "type": "final",
+                "state": {
+                    "answer": "Done",
+                    "result_type": "answer",
+                    "report_completed": True,
+                },
+            }
+
+        with (
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                return_value={"intent": "direct_answer", "reason": "test"},
+            ),
+            patch.object(research_stream, "stream_answer_direct_node", fake_direct_answer_node),
+        ):
+            events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
+
+        token_payloads = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: token_usage")
+        ]
+        complete_payload = json.loads(
+            [event for event in events if event.startswith("event: complete")][0].split("data: ", 1)[1]
+        )
+
+        self.assertEqual(
+            token_payloads,
+            [
+                {
+                    "input_tokens": 7,
+                    "output_tokens": 5,
+                    "total_tokens": 12,
+                }
+            ],
+        )
+        self.assertEqual(complete_payload["token_usage"], token_payloads[-1])
+
     def test_stream_route_returns_text_event_stream(self):
         from agents.research_stream import format_sse_event
         from routers import research
 
-        async def fake_stream(query, run_id=None, display_query=None, store=None, on_complete=None):
+        async def fake_stream(
+            query,
+            run_id=None,
+            display_query=None,
+            store=None,
+            latest_result=None,
+            execution_mode="auto",
+            on_complete=None,
+        ):
             yield format_sse_event("status", {"stage": "search", "message": query})
             yield format_sse_event("complete", {"query": query, "status": "completed"})
 
@@ -538,7 +600,15 @@ class ResearchStreamTests(TestCase):
                     patch.object(research, "stream_research_events") as stream,
                     patch.object(research, "stream_persisted_research_run_events", side_effect=fake_persisted_stream),
                 ):
-                    async def fake_stream(query, run_id=None, display_query=None, store=None, on_complete=None):
+                    async def fake_stream(
+                        query,
+                        run_id=None,
+                        display_query=None,
+                        store=None,
+                        latest_result=None,
+                        execution_mode="auto",
+                        on_complete=None,
+                    ):
                         self.assertEqual(run_id, "run-test")
                         yield 'event: complete\ndata: {"query":"test query","status":"completed"}\n\n'
 

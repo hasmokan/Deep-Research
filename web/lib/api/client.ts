@@ -5,6 +5,7 @@
 import type {
   AgentSkill,
   AgentSkillUpsertRequest,
+  ClientErrorLogRequest,
   Document,
   ResearchPlanStreamHandlers,
   ResearchPlanResponse,
@@ -32,11 +33,20 @@ export class ApiClient {
     this.accessTokenProvider = provider;
   }
 
-  private headers(headers?: HeadersInit): Headers {
+  private newRequestId(): string {
+    const randomId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return `req-${randomId}`;
+  }
+
+  private headers(headers?: HeadersInit, requestId: string = this.newRequestId()): Headers {
     const nextHeaders = new Headers(headers);
 
     if (!nextHeaders.has('Content-Type')) {
       nextHeaders.set('Content-Type', 'application/json');
+    }
+
+    if (!nextHeaders.has('X-Request-ID')) {
+      nextHeaders.set('X-Request-ID', requestId);
     }
 
     const token = this.accessTokenProvider?.();
@@ -52,20 +62,79 @@ export class ApiClient {
     options?: RequestInit
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
+    const requestId = this.newRequestId();
 
-    const response = await fetch(url, {
-      ...options,
-      headers: this.headers(options?.headers),
-    });
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers: this.headers(options?.headers, requestId),
+      });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: 'An unknown error occurred',
-      }));
-      throw new Error(error.detail || `HTTP ${response.status}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({
+          detail: 'An unknown error occurred',
+        }));
+        const message = error.detail || `HTTP ${response.status}`;
+        this.reportApiFailure(endpoint, message, requestId, {
+          status: response.status,
+          method: options?.method ?? 'GET',
+        });
+        throw this.withRequestId(new Error(message), requestId);
+      }
+
+      return response.json();
+    } catch (error) {
+      if (error instanceof Error && !('requestId' in error)) {
+        this.reportApiFailure(endpoint, error.message, requestId, {
+          method: options?.method ?? 'GET',
+        });
+        throw this.withRequestId(error, requestId);
+      }
+      throw error;
     }
+  }
 
-    return response.json();
+  async reportClientError(request: ClientErrorLogRequest): Promise<void> {
+    const requestId = request.request_id ?? this.newRequestId();
+    const payload: ClientErrorLogRequest = {
+      ...this.defaultClientErrorContext(),
+      ...request,
+    };
+
+    await fetch(`${this.baseUrl}/api/diagnostics/client-error`, {
+      method: 'POST',
+      headers: this.headers(undefined, requestId),
+      body: JSON.stringify(payload),
+    }).catch(() => undefined);
+  }
+
+  private reportApiFailure(
+    endpoint: string,
+    message: string,
+    requestId: string,
+    context: Record<string, unknown>
+  ): void {
+    void this.reportClientError({
+      message,
+      source: 'api-client',
+      level: 'error',
+      request_id: requestId,
+      context: {
+        endpoint,
+        ...context,
+      },
+    });
+  }
+
+  private withRequestId<T extends Error>(error: T, requestId: string): T & { requestId: string } {
+    return Object.assign(error, { requestId });
+  }
+
+  private defaultClientErrorContext(): Pick<ClientErrorLogRequest, 'url' | 'user_agent'> {
+    return {
+      url: typeof window !== 'undefined' ? window.location.href : undefined,
+      user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+    };
   }
 
   /**
@@ -95,9 +164,10 @@ export class ApiClient {
     request: ResearchRequest,
     handlers: ResearchPlanStreamHandlers = {}
   ): Promise<ResearchPlanResponse> {
+    const requestId = this.newRequestId();
     const response = await fetch(`${this.baseUrl}/api/research/plan/stream`, {
       method: 'POST',
-      headers: this.headers(),
+      headers: this.headers(undefined, requestId),
       body: JSON.stringify(request),
       signal: handlers.signal,
     });
@@ -106,14 +176,26 @@ export class ApiClient {
       const error = await response.json().catch(() => ({
         detail: 'Research plan stream failed',
       }));
-      throw new Error(error.detail || `HTTP ${response.status}`);
+      const message = error.detail || `HTTP ${response.status}`;
+      this.reportApiFailure('/api/research/plan/stream', message, requestId, { status: response.status, method: 'POST' });
+      throw this.withRequestId(new Error(message), requestId);
     }
 
     if (!response.body) {
-      throw new Error('Research plan stream response was empty');
+      const message = 'Research plan stream response was empty';
+      this.reportApiFailure('/api/research/plan/stream', message, requestId, { method: 'POST' });
+      throw this.withRequestId(new Error(message), requestId);
     }
 
-    return this.readResearchPlanStream(response.body, handlers);
+    try {
+      return await this.readResearchPlanStream(response.body, handlers);
+    } catch (error) {
+      if (error instanceof Error) {
+        this.reportApiFailure('/api/research/plan/stream', error.message, requestId, { method: 'POST', stream: true });
+        throw this.withRequestId(error, requestId);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -134,6 +216,7 @@ export class ApiClient {
     runId: string,
     handlers: ResearchRunStreamHandlers = {}
   ): Promise<ResearchResult> {
+    const requestId = this.newRequestId();
     const params = new URLSearchParams();
     if (handlers.afterSeq && handlers.afterSeq > 0) {
       params.set('after_seq', String(handlers.afterSeq));
@@ -143,7 +226,7 @@ export class ApiClient {
       `${this.baseUrl}/api/research/runs/${encodeURIComponent(runId)}/stream${queryString ? `?${queryString}` : ''}`,
       {
         method: 'GET',
-        headers: this.headers(),
+        headers: this.headers(undefined, requestId),
         signal: handlers.signal,
       },
     );
@@ -152,14 +235,26 @@ export class ApiClient {
       const error = await response.json().catch(() => ({
         detail: 'Research run stream failed',
       }));
-      throw new Error(error.detail || `HTTP ${response.status}`);
+      const message = error.detail || `HTTP ${response.status}`;
+      this.reportApiFailure(`/api/research/runs/${runId}/stream`, message, requestId, { status: response.status, method: 'GET' });
+      throw this.withRequestId(new Error(message), requestId);
     }
 
     if (!response.body) {
-      throw new Error('Research run stream response was empty');
+      const message = 'Research run stream response was empty';
+      this.reportApiFailure(`/api/research/runs/${runId}/stream`, message, requestId, { method: 'GET' });
+      throw this.withRequestId(new Error(message), requestId);
     }
 
-    return this.readResearchStream(response.body, handlers);
+    try {
+      return await this.readResearchStream(response.body, handlers);
+    } catch (error) {
+      if (error instanceof Error) {
+        this.reportApiFailure(`/api/research/runs/${runId}/stream`, error.message, requestId, { method: 'GET', stream: true });
+        throw this.withRequestId(error, requestId);
+      }
+      throw error;
+    }
   }
 
   async listResearchThreads(): Promise<ResearchThread[]> {
@@ -208,9 +303,10 @@ export class ApiClient {
     request: ResearchRequest,
     handlers: ResearchStreamHandlers = {}
   ): Promise<ResearchResult> {
+    const requestId = this.newRequestId();
     const response = await fetch(`${this.baseUrl}/api/research/stream`, {
       method: 'POST',
-      headers: this.headers(),
+      headers: this.headers(undefined, requestId),
       body: JSON.stringify(request),
       signal: handlers.signal,
     });
@@ -219,14 +315,26 @@ export class ApiClient {
       const error = await response.json().catch(() => ({
         detail: 'Research stream failed',
       }));
-      throw new Error(error.detail || `HTTP ${response.status}`);
+      const message = error.detail || `HTTP ${response.status}`;
+      this.reportApiFailure('/api/research/stream', message, requestId, { status: response.status, method: 'POST' });
+      throw this.withRequestId(new Error(message), requestId);
     }
 
     if (!response.body) {
-      throw new Error('Research stream response was empty');
+      const message = 'Research stream response was empty';
+      this.reportApiFailure('/api/research/stream', message, requestId, { method: 'POST' });
+      throw this.withRequestId(new Error(message), requestId);
     }
 
-    return this.readResearchStream(response.body, handlers);
+    try {
+      return await this.readResearchStream(response.body, handlers);
+    } catch (error) {
+      if (error instanceof Error) {
+        this.reportApiFailure('/api/research/stream', error.message, requestId, { method: 'POST', stream: true });
+        throw this.withRequestId(error, requestId);
+      }
+      throw error;
+    }
   }
 
   private async readResearchStream(
@@ -374,6 +482,8 @@ export class ApiClient {
       handlers.onAnswerDelta?.(payload.delta ?? '');
     } else if (event === 'answer') {
       handlers.onAnswer?.(payload.answer ?? null);
+    } else if (event === 'token_usage') {
+      handlers.onTokenUsage?.(payload);
     } else if (event === 'complete') {
       return { type: 'complete', payload };
     } else if (event === 'stream_error') {

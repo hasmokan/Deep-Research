@@ -23,9 +23,11 @@ from agents.nodes.generate import stream_generate_node
 from agents.nodes.query_resolution import resolve_research_query_node
 from agents.nodes.web_search import web_search_node
 from services.langfuse_observability import get_langfuse_tracer
+from services.request_tracing import current_request_id
+from agents.token_usage import TokenUsageAccumulator, add_token_usage, normalize_token_usage
 
 
-research_agent: Any | None = None
+_streaming_research_graph_override: Any | None = None
 
 
 class StreamingResearchState(TypedDict, total=False):
@@ -49,9 +51,11 @@ class StreamingResearchState(TypedDict, total=False):
     execution_mode: str
     stream_events: list[dict[str, Any]]
     run_id: str | None
+    trace_id: str | None
     web_search_completed: bool
     analysis_completed: bool
     report_completed: bool
+    token_usage: dict[str, int] | None
 
 
 def format_sse_event(event: str, data: dict[str, Any]) -> str:
@@ -120,6 +124,7 @@ async def stream_research_events(
     """Run research and emit progress/result events as SSE strings."""
     visible_query = display_query or query
     tracer = get_langfuse_tracer()
+    trace_id = current_request_id()
     state: dict[str, Any] = {
         "query": query,
         "display_query": visible_query,
@@ -138,10 +143,12 @@ async def stream_research_events(
         "answer": None,
         "result_type": "report",
         "run_id": run_id,
+        "trace_id": trace_id,
         "execution_mode": execution_mode,
         "web_search_completed": False,
         "analysis_completed": False,
         "report_completed": False,
+        "token_usage": None,
     }
 
     def record_event(event: str, data: dict[str, Any]) -> str:
@@ -227,8 +234,8 @@ def build_streaming_research_graph() -> Any:
 
 
 def _get_streaming_research_graph() -> Any:
-    if research_agent is not None:
-        return research_agent
+    if _streaming_research_graph_override is not None:
+        return _streaming_research_graph_override
     return build_streaming_research_graph()
 
 
@@ -417,21 +424,35 @@ async def _streaming_generate_node(state: dict[str, Any]) -> dict[str, Any]:
 async def _collect_streaming_node_events(stream: Any) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     final_state: dict[str, Any] = {}
+    token_usage = TokenUsageAccumulator()
 
     async for event in stream:
         if not isinstance(event, dict):
             continue
+
+        if event.get("type") == "token_usage":
+            usage = token_usage.account_usage(
+                event.get("usage"),
+                str(event.get("id") or "") or None,
+            )
+            if not usage:
+                continue
+            event = {**event, "usage": usage}
+
         events.append(event)
         if event.get("type") == "final":
             final_state.update(event.get("state") or {})
 
     final_state["stream_events"] = events
+    if token_usage.usage:
+        final_state["token_usage"] = token_usage.usage
     return final_state
 
 
 async def _streaming_answer_react_node(state: dict[str, Any]) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     working_state = dict(state)
+    token_usage = TokenUsageAccumulator()
 
     tracer = get_langfuse_tracer()
     with tracer.start(
@@ -448,13 +469,27 @@ async def _streaming_answer_react_node(state: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(react_event, dict):
                 continue
 
-            events.append(react_event)
             event_type = react_event.get("type")
 
             if event_type == "agent_message":
                 message = react_event.get("message") if isinstance(react_event.get("message"), dict) else {}
+                usage = token_usage.account_usage(
+                    message.get("usage_metadata"),
+                    str(message.get("id") or "") or None,
+                )
+                if usage:
+                    react_event = {
+                        "type": "token_usage",
+                        "id": message.get("id") or "react-agent-llm",
+                        "usage": usage,
+                    }
+                    events.append(react_event)
+                    events.append({"type": "agent_message", "message": message})
+                else:
+                    events.append(react_event)
                 _merge_react_documents(working_state, message)
             elif event_type == "clarification":
+                events.append(react_event)
                 question = str(react_event.get("question") or react_event.get("message") or "").strip()
                 working_state.update(
                     {
@@ -465,6 +500,7 @@ async def _streaming_answer_react_node(state: dict[str, Any]) -> dict[str, Any]:
                 )
                 break
             elif event_type == "final":
+                events.append(react_event)
                 working_state.update(
                     {
                         "answer": str(react_event.get("answer") or "").strip(),
@@ -472,6 +508,8 @@ async def _streaming_answer_react_node(state: dict[str, Any]) -> dict[str, Any]:
                         "report_completed": True,
                     }
                 )
+            else:
+                events.append(react_event)
         react_observation.update(
             output={
                 "answer_preview": _text_preview(working_state.get("answer")),
@@ -479,13 +517,16 @@ async def _streaming_answer_react_node(state: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    return {
+    result = {
         "documents": working_state.get("documents", []),
         "answer": working_state.get("answer"),
         "result_type": working_state.get("result_type") or "answer",
         "report_completed": bool(working_state.get("report_completed")),
         "stream_events": events,
     }
+    if token_usage.usage:
+        result["token_usage"] = token_usage.usage
+    return result
 
 
 async def _streaming_web_search_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -535,6 +576,7 @@ async def _stream_langgraph_research_events(
     complete_event: Any,
 ) -> AsyncIterator[str]:
     state["execution_mode"] = execution_mode
+    trace_id = state.get("trace_id") or current_request_id()
 
     with tracer.start(
         "research-run",
@@ -545,12 +587,14 @@ async def _stream_langgraph_research_events(
         },
         metadata={
             "run_id": run_id,
+            "trace_id": trace_id,
             "has_latest_result": bool(latest_result),
             "runtime": "langgraph",
         },
     ) as run_observation, tracer.propagate_attributes(
         session_id=run_id,
         tags=["deep-research", "sse", "langgraph"],
+        metadata={"run_id": run_id, "trace_id": trace_id},
     ):
         tracer.update_current_trace(
             name=f"research: {visible_query[:80]}",
@@ -558,6 +602,7 @@ async def _stream_langgraph_research_events(
             tags=["deep-research", "sse", "langgraph"],
             metadata={
                 "run_id": run_id,
+                "trace_id": trace_id,
                 "display_query": visible_query,
                 "has_latest_result": bool(latest_result),
                 "runtime": "langgraph",
@@ -584,7 +629,7 @@ async def _stream_langgraph_research_events(
                     if not isinstance(node_update, dict):
                         continue
 
-                    state.update(node_update)
+                    _merge_graph_update(state, node_update)
                     async for event in _sse_events_for_graph_update(
                         node_name,
                         state,
@@ -615,6 +660,19 @@ async def _stream_langgraph_research_events(
             yield record_event("stream_error", {"detail": f"Research execution failed: {exc}"})
         finally:
             tracer.flush()
+
+
+def _merge_graph_update(state: dict[str, Any], node_update: dict[str, Any]) -> None:
+    previous_usage = normalize_token_usage(state.get("token_usage"))
+    node_usage = normalize_token_usage(node_update.get("token_usage"))
+    update_without_usage = {key: value for key, value in node_update.items() if key != "token_usage"}
+
+    state["_token_usage_before_update"] = previous_usage
+    state["_token_usage_streamed_for_update"] = False
+    state.update(update_without_usage)
+
+    if node_usage:
+        state["token_usage"] = add_token_usage(previous_usage, node_usage)
 
 
 async def _sse_events_for_graph_update(
@@ -684,7 +742,7 @@ async def _sse_events_for_graph_update(
         await asyncio.sleep(0)
 
         if not documents:
-            async for event in _complete_stream_from_state(state, run_observation, complete_event):
+            async for event in _complete_stream_from_state(state, run_observation, complete_event, record_event):
                 yield event
             return
 
@@ -710,7 +768,7 @@ async def _sse_events_for_graph_update(
         return
 
     if node_name == "analyze":
-        async for event in _emit_collected_stream_events(state.get("stream_events", []), record_event):
+        async for event in _emit_collected_stream_events(state.get("stream_events", []), record_event, state):
             yield event
         yield record_event("analysis", {"analysis": state.get("analysis")})
         await asyncio.sleep(0)
@@ -738,20 +796,20 @@ async def _sse_events_for_graph_update(
         return
 
     if node_name == "generate":
-        async for event in _emit_collected_stream_events(state.get("stream_events", []), record_event):
+        async for event in _emit_collected_stream_events(state.get("stream_events", []), record_event, state):
             yield event
         yield record_event("report", {"report": state.get("report")})
         await asyncio.sleep(0)
-        async for event in _complete_stream_from_state(state, run_observation, complete_event):
+        async for event in _complete_stream_from_state(state, run_observation, complete_event, record_event):
             yield event
         return
 
     if node_name in {"answer_coding", "answer_direct"}:
-        async for event in _emit_collected_stream_events(state.get("stream_events", []), record_event):
+        async for event in _emit_collected_stream_events(state.get("stream_events", []), record_event, state):
             yield event
         yield record_event("answer", {"answer": state.get("answer")})
         await asyncio.sleep(0)
-        async for event in _complete_stream_from_state(state, run_observation, complete_event):
+        async for event in _complete_stream_from_state(state, run_observation, complete_event, record_event):
             yield event
         return
 
@@ -761,7 +819,7 @@ async def _sse_events_for_graph_update(
         if state.get("answer") is not None and not state.get("_react_answer_emitted"):
             yield record_event("answer", {"answer": state.get("answer")})
             await asyncio.sleep(0)
-        async for event in _complete_stream_from_state(state, run_observation, complete_event):
+        async for event in _complete_stream_from_state(state, run_observation, complete_event, record_event):
             yield event
         return
 
@@ -779,7 +837,7 @@ async def _sse_events_for_graph_update(
             await asyncio.sleep(0)
         yield record_event("answer", {"answer": state.get("answer")})
         await asyncio.sleep(0)
-        async for event in _complete_stream_from_state(state, run_observation, complete_event):
+        async for event in _complete_stream_from_state(state, run_observation, complete_event, record_event):
             yield event
         return
 
@@ -916,13 +974,21 @@ async def _pre_node_status_events(
 async def _emit_collected_stream_events(
     events: list[dict[str, Any]],
     record_event: Any,
+    state: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
+    token_usage_base = normalize_token_usage(state.get("_token_usage_before_update") if state else None)
     for event in events:
         if not isinstance(event, dict):
             continue
 
         event_type = event.get("type")
-        if event_type == "answer_delta":
+        if event_type == "token_usage":
+            token_usage = add_token_usage(token_usage_base, normalize_token_usage(event.get("usage")))
+            if state is not None:
+                state["_token_usage_streamed_for_update"] = True
+            yield record_event("token_usage", token_usage)
+            await asyncio.sleep(0)
+        elif event_type == "answer_delta":
             yield record_event("answer_delta", {"delta": event.get("delta") or ""})
             await asyncio.sleep(0)
         elif event_type == "trace":
@@ -958,12 +1024,18 @@ async def _emit_react_stream_events(
     record_event: Any,
 ) -> AsyncIterator[str]:
     emitted_answer = False
+    token_usage_base = normalize_token_usage(state.get("_token_usage_before_update"))
     for react_event in state.get("stream_events", []):
         if not isinstance(react_event, dict):
             continue
 
         event_type = react_event.get("type")
-        if event_type == "agent_message":
+        if event_type == "token_usage":
+            token_usage = add_token_usage(token_usage_base, normalize_token_usage(react_event.get("usage")))
+            state["_token_usage_streamed_for_update"] = True
+            yield record_event("token_usage", token_usage)
+            await asyncio.sleep(0)
+        elif event_type == "agent_message":
             message = react_event.get("message") if isinstance(react_event.get("message"), dict) else {}
             yield record_event("agent_message", message)
             for trace_event in _trace_events_from_agent_message(message):
@@ -983,12 +1055,17 @@ async def _complete_stream_from_state(
     state: dict[str, Any],
     run_observation: Any,
     complete_event: Any,
+    record_event: Any,
 ) -> AsyncIterator[str]:
     if state.get("_stream_completed"):
         return
 
     result_payload = _result_payload(state)
     run_observation.update(output=_result_observability_summary(result_payload))
+    token_usage = normalize_token_usage(state.get("token_usage"))
+    if token_usage and not state.get("_token_usage_streamed_for_update"):
+        yield record_event("token_usage", token_usage)
+        await asyncio.sleep(0)
     state["_stream_completed"] = True
     yield await complete_event(result_payload)
 
@@ -1004,7 +1081,7 @@ def _search_tool_call_id(state: dict[str, Any], run_id: str | None) -> str:
 
 
 def _result_payload(state: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         "query": state.get("display_query") or state["query"],
         "documents": state.get("documents", []),
         "analysis": state.get("analysis"),
@@ -1015,6 +1092,10 @@ def _result_payload(state: dict[str, Any]) -> dict[str, Any]:
         "result_type": state.get("result_type") or "report",
         "status": "completed" if state.get("report_completed") else "failed",
     }
+    token_usage = normalize_token_usage(state.get("token_usage"))
+    if token_usage:
+        payload["token_usage"] = token_usage
+    return payload
 
 
 def _resolved_query(state: dict[str, Any]) -> str:
@@ -1317,6 +1398,7 @@ def _result_observability_summary(result: dict[str, Any]) -> dict[str, Any]:
         "answer_preview": _text_preview(result.get("answer")),
         "analysis_preview": _text_preview(result.get("analysis")),
         "report_preview": _text_preview(result.get("report")),
+        "token_usage": normalize_token_usage(result.get("token_usage")),
     }
 
 

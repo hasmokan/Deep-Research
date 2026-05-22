@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -14,6 +15,7 @@ from core.config import get_settings
 from services.langfuse_observability import ainvoke_langchain, get_langfuse_tracer
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -58,7 +60,18 @@ async def assess_research_plan_need(query: str) -> dict[str, Any]:
     config = _langchain_config("plan-need-llm", "plan")
     response = await ainvoke_langchain(chain, payload, config)
     content, _thinking = extract_response_parts(response)
-    payload = _parse_json_payload(content)
+    try:
+        payload = _parse_json_payload(content)
+    except ValueError:
+        logger.warning(
+            "Plan-need assessment returned non-JSON content; falling back to direct answer. query=%r content=%r",
+            _limit_log_text(normalized_query),
+            _limit_log_text(content),
+        )
+        return {
+            "should_plan": False,
+            "reason": "This request can be answered directly.",
+        }
 
     return _normalize_plan_need_payload(payload)
 
@@ -204,6 +217,13 @@ def _looks_like_generic_fallback_summary(summary: str) -> bool:
         and "compare evidence" in normalized_summary
         and "produce a cited report" in normalized_summary
     )
+
+
+def _limit_log_text(value: str, limit: int = 500) -> str:
+    normalized = " ".join(str(value or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3] + "..."
 
 
 def _langchain_config(run_name: str, stage: str) -> dict[str, Any]:

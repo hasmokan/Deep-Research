@@ -38,6 +38,36 @@ class _FakeToolCallingModel:
         return SimpleNamespace(content="The sandbox printed ok.", tool_calls=[])
 
 
+class _FakeBudgetExhaustedModel:
+    def __init__(self):
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        self.bound_tools = tools
+        return self
+
+    async def ainvoke(self, messages, config=None):
+        self.calls += 1
+        if self.calls <= 4:
+            return SimpleNamespace(
+                content="",
+                tool_calls=[
+                    {
+                        "id": f"call-bash-{self.calls}",
+                        "name": "bash",
+                        "args": {
+                            "command": "python network_log_demo.py",
+                        },
+                    },
+                ],
+            )
+
+        return SimpleNamespace(
+            content="我已经在沙箱中运行了 Python 网络日志示例，并汇总了输出。",
+            tool_calls=[],
+        )
+
+
 class SandboxCodingAgentTests(IsolatedAsyncioTestCase):
     async def test_stream_answer_coding_node_executes_sandbox_tool_calls(self):
         from agents.nodes import conversation_router
@@ -82,3 +112,24 @@ class SandboxCodingAgentTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(result["result_type"], "answer")
         self.assertEqual(result["answer"], "The sandbox printed ok.")
+
+    async def test_stream_answer_coding_node_synthesizes_after_tool_budget(self):
+        from agents.nodes import conversation_router
+
+        fake_model = _FakeBudgetExhaustedModel()
+
+        with patch.object(conversation_router, "ChatOpenAI", return_value=fake_model):
+            events = [
+                event
+                async for event in conversation_router.stream_answer_coding_node(
+                    {"query": "写 Python 代码并抓取网络日志", "run_id": "run-sandbox-budget"}
+                )
+            ]
+
+        final_events = [event for event in events if event["type"] == "final"]
+        delta_events = [event for event in events if event["type"] == "answer_delta"]
+
+        self.assertEqual(fake_model.calls, 5)
+        self.assertEqual(final_events[-1]["state"]["answer"], "我已经在沙箱中运行了 Python 网络日志示例，并汇总了输出。")
+        self.assertEqual(delta_events[-1]["delta"], "我已经在沙箱中运行了 Python 网络日志示例，并汇总了输出。")
+        self.assertNotIn("maximum number of tool rounds", final_events[-1]["state"]["answer"])

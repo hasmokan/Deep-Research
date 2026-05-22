@@ -5,14 +5,18 @@ import os
 
 load_dotenv()
 
-from routers import research, skills
+from routers import diagnostics, research, skills
 from services.langfuse_observability import get_langfuse_tracer
+from services.request_tracing import RequestTracingMiddleware, configure_logging
 
 app = FastAPI(
     title="Deep Research API",
     description="AI-powered deep research tool with intelligent search and report generation",
     version="1.0.0"
 )
+
+configure_logging()
+app.add_middleware(RequestTracingMiddleware)
 
 # Configure CORS
 app.add_middleware(
@@ -25,11 +29,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
 
 # Include routers
 app.include_router(research.router)
 app.include_router(skills.router)
+app.include_router(diagnostics.router)
 
 @app.get("/")
 async def root():

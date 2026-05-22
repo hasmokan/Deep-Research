@@ -7,6 +7,8 @@ import {
   appendResearchActivityThinking,
   appendResearchActivityStatus,
   appendResearchActivityDocuments,
+  appendResearchActivityEstimatedTokenUsage,
+  appendResearchActivityTokenUsage,
   applyResearchRunToActivityMessage,
   buildResearchRequestMessages,
   createAssistantResultMessage,
@@ -14,6 +16,7 @@ import {
   createUserMessage,
   completeResearchActivityMessage,
   setResearchActivityRunId,
+  setResearchActivityRunMetadata,
   stopRunningResearchActivityMessage,
 } from './conversation.ts';
 
@@ -225,6 +228,62 @@ test('assistant research activity stores ReAct agent messages', () => {
   assert.equal(updatedMessage.researchActivity?.updatedAt, '2026-05-16T10:01:00.000Z');
 });
 
+test('assistant research activity stores streamed token usage', () => {
+  const activityMessage = createAssistantResearchActivityMessage('刷机有什么用', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const updatedMessage = appendResearchActivityTokenUsage(
+    activityMessage,
+    {
+      input_tokens: 11,
+      output_tokens: 7,
+      total_tokens: 18,
+    },
+    '2026-05-16T10:01:00.000Z',
+  );
+
+  assert.deepEqual(updatedMessage.researchActivity?.tokenUsage, {
+    input_tokens: 11,
+    output_tokens: 7,
+    total_tokens: 18,
+  });
+  assert.deepEqual(updatedMessage.researchActivity?.liveTokenUsage, {
+    input_tokens: 11,
+    output_tokens: 7,
+    total_tokens: 18,
+  });
+  assert.equal(updatedMessage.researchActivity?.isTokenUsageEstimated, false);
+  assert.equal(updatedMessage.researchActivity?.updatedAt, '2026-05-16T10:01:00.000Z');
+});
+
+test('assistant research activity accumulates live estimated token usage before real usage arrives', () => {
+  const activityMessage = createAssistantResearchActivityMessage('刷机有什么用', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const withOutputEstimate = appendResearchActivityEstimatedTokenUsage(
+    activityMessage,
+    '这是流式输出的一小段内容',
+    'output',
+    '2026-05-16T10:00:05.000Z',
+  );
+  const withInputEstimate = appendResearchActivityEstimatedTokenUsage(
+    withOutputEstimate,
+    '工具返回的观察内容会进入下一轮模型上下文',
+    'input',
+    '2026-05-16T10:00:06.000Z',
+  );
+
+  assert.equal(withInputEstimate.researchActivity?.tokenUsage, null);
+  assert.equal(withInputEstimate.researchActivity?.isTokenUsageEstimated, true);
+  assert.ok((withInputEstimate.researchActivity?.liveTokenUsage?.input_tokens ?? 0) > 0);
+  assert.ok((withInputEstimate.researchActivity?.liveTokenUsage?.output_tokens ?? 0) > 0);
+  assert.equal(withInputEstimate.researchActivity?.updatedAt, '2026-05-16T10:00:06.000Z');
+});
+
 test('applyResearchRunToActivityMessage restores ReAct agent messages', () => {
   const activityMessage = createAssistantResearchActivityMessage('谁是 hasmokan', {
     id: 'assistant-activity-1',
@@ -274,6 +333,22 @@ test('research activity stores backend run id for later restoration', () => {
   assert.equal(updatedMessage.researchActivity?.updatedAt, '2026-05-16T10:00:05.000Z');
 });
 
+test('research activity stores backend trace id for diagnostics', () => {
+  const activityMessage = createAssistantResearchActivityMessage('青稞市场占有率', {
+    id: 'assistant-activity-1',
+    now: '2026-05-16T10:00:00.000Z',
+  });
+
+  const updatedMessage = setResearchActivityRunMetadata(
+    activityMessage,
+    { run_id: 'run-123', trace_id: 'trace-123' },
+    '2026-05-16T10:00:05.000Z',
+  );
+
+  assert.equal(updatedMessage.researchActivity?.runId, 'run-123');
+  assert.equal(updatedMessage.researchActivity?.traceId, 'trace-123');
+});
+
 test('applyResearchRunToActivityMessage rebuilds activity trace and completed result', () => {
   const activityMessage = createAssistantResearchActivityMessage('做研究', {
     id: 'assistant-activity-1',
@@ -282,6 +357,7 @@ test('applyResearchRunToActivityMessage rebuilds activity trace and completed re
 
   const restoredMessage = applyResearchRunToActivityMessage(activityMessage, {
     run_id: 'run-123',
+    trace_id: 'trace-123',
     query: '做研究',
     status: 'completed',
     created_at: '2026-05-16T10:00:00.000Z',
@@ -322,18 +398,47 @@ test('applyResearchRunToActivityMessage rebuilds activity trace and completed re
       },
       {
         run_id: 'run-123',
-        event: 'complete',
-        data: completedResult,
+        event: 'token_usage',
+        data: {
+          input_tokens: 13,
+          output_tokens: 8,
+          total_tokens: 21,
+        },
         seq: 4,
+        created_at: '2026-05-16T10:01:00.000Z',
+      },
+      {
+        run_id: 'run-123',
+        event: 'complete',
+        data: {
+          ...completedResult,
+          token_usage: {
+            input_tokens: 13,
+            output_tokens: 8,
+            total_tokens: 21,
+          },
+        },
+        seq: 5,
         created_at: '2026-05-16T10:02:00.000Z',
       },
     ],
   });
 
   assert.equal(restoredMessage.researchActivity?.runId, 'run-123');
+  assert.equal(restoredMessage.researchActivity?.traceId, 'trace-123');
   assert.equal(restoredMessage.researchActivity?.streamStatuses.length, 1);
   assert.equal(restoredMessage.researchActivity?.streamDocuments.length, 1);
   assert.equal(restoredMessage.researchActivity?.status, 'completed');
+  assert.deepEqual(restoredMessage.researchActivity?.tokenUsage, {
+    input_tokens: 13,
+    output_tokens: 8,
+    total_tokens: 21,
+  });
+  assert.deepEqual(restoredMessage.result?.token_usage, {
+    input_tokens: 13,
+    output_tokens: 8,
+    total_tokens: 21,
+  });
   assert.equal(restoredMessage.result?.report, completedResult.report);
 });
 

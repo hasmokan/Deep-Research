@@ -10,7 +10,9 @@ import type {
   ResearchStreamStatus,
   ResearchStreamThinking,
   ResearchStreamTrace,
+  TokenUsage,
 } from '@/lib/api/types';
+import { addEstimatedTokenUsageFromText, type TokenUsageDirection } from '@/lib/research/token-usage';
 
 interface ResearchState {
   // State
@@ -23,6 +25,9 @@ interface ResearchState {
   streamDocuments: Document[];
   streamTrace: ResearchStreamTrace[];
   streamAgentMessages: AgentMessage[];
+  streamTokenUsage: TokenUsage | null;
+  streamLiveTokenUsage: TokenUsage | null;
+  isStreamTokenUsageEstimated: boolean;
 
   // Actions
   setQuery: (query: string) => void;
@@ -35,6 +40,8 @@ interface ResearchState {
   setStreamDocuments: (documents: Document[]) => void;
   addStreamTrace: (trace: ResearchStreamTrace) => void;
   addStreamAgentMessage: (message: AgentMessage) => void;
+  setStreamTokenUsage: (usage: TokenUsage | null) => void;
+  addEstimatedStreamTokenUsage: (text: string, direction: TokenUsageDirection) => void;
   reset: () => void;
 }
 
@@ -49,13 +56,25 @@ export const useResearchStore = create<ResearchState>((set) => ({
   streamDocuments: [],
   streamTrace: [],
   streamAgentMessages: [],
+  streamTokenUsage: null,
+  streamLiveTokenUsage: null,
+  isStreamTokenUsageEstimated: false,
 
   // Actions
   setQuery: (query) => set({ query }),
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
   setResult: (result) => set({ result }),
-  resetStream: () => set({ streamStatuses: [], streamThinking: [], streamDocuments: [], streamTrace: [], streamAgentMessages: [] }),
+  resetStream: () => set({
+    streamStatuses: [],
+    streamThinking: [],
+    streamDocuments: [],
+    streamTrace: [],
+    streamAgentMessages: [],
+    streamTokenUsage: null,
+    streamLiveTokenUsage: null,
+    isStreamTokenUsageEstimated: false,
+  }),
   addStreamStatus: (status) => set((state) => ({
     streamStatuses: [...state.streamStatuses, status],
   })),
@@ -69,6 +88,19 @@ export const useResearchStore = create<ResearchState>((set) => ({
   addStreamAgentMessage: (message) => set((state) => ({
     streamAgentMessages: [...state.streamAgentMessages, message],
   })),
+  setStreamTokenUsage: (usage) => set({
+    streamTokenUsage: usage,
+    streamLiveTokenUsage: usage,
+    isStreamTokenUsageEstimated: false,
+  }),
+  addEstimatedStreamTokenUsage: (text, direction) => set((state) => ({
+    streamLiveTokenUsage: addEstimatedTokenUsageFromText(
+      state.streamLiveTokenUsage ?? state.streamTokenUsage,
+      text,
+      direction,
+    ),
+    isStreamTokenUsageEstimated: true,
+  })),
   reset: () => set({
     query: '',
     isLoading: false,
@@ -79,6 +111,9 @@ export const useResearchStore = create<ResearchState>((set) => ({
     streamDocuments: [],
     streamTrace: [],
     streamAgentMessages: [],
+    streamTokenUsage: null,
+    streamLiveTokenUsage: null,
+    isStreamTokenUsageEstimated: false,
   }),
 }));
 

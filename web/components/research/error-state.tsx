@@ -1,84 +1,160 @@
 'use client';
 
 /**
- * Error state component with friendly design
+ * Compact inline failure state rendered inside the conversation.
  */
 
-import { AlertCircle, RotateCcw, HelpCircle } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, Check, ChevronDown, Copy, MessageCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useResearchStore } from '@/lib/store/research';
+import { cn } from '@/lib/utils';
+
+interface ErrorDiagnostics {
+  requestId?: string | null;
+  traceId?: string | null;
+  runId?: string | null;
+}
 
 interface ErrorStateProps {
   error: string;
+  diagnostics?: ErrorDiagnostics | null;
+  onRetry?: () => void;
+  onDirectAnswer?: () => void;
 }
 
-export function ErrorState({ error }: ErrorStateProps) {
-  const { reset } = useResearchStore();
+export function ErrorState({ error, diagnostics, onRetry, onDirectAnswer }: ErrorStateProps) {
+  const [isDetailsOpen, setDetailsOpen] = useState(false);
+  const [copiedValue, setCopiedValue] = useState<string | null>(null);
+  const summary = getFriendlyErrorSummary(error);
+  const diagnosticItems = [
+    { label: 'Error ID', value: diagnostics?.requestId },
+    { label: 'Trace', value: diagnostics?.traceId },
+    { label: 'Run', value: diagnostics?.runId },
+  ].filter((item): item is { label: string; value: string } => Boolean(item.value));
+
+  const copyDiagnostic = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedValue(value);
+      window.setTimeout(() => setCopiedValue((current) => (current === value ? null : current)), 1200);
+    } catch {
+      setCopiedValue(null);
+    }
+  };
 
   return (
-    <div className="glass-strong shadow-premium rounded-[8px] border-destructive/20 p-8">
-      <div className="flex flex-col items-center text-center space-y-6">
-        {/* Icon */}
-        <div className="flex h-16 w-16 items-center justify-center rounded-[8px] bg-destructive/10">
-          <AlertCircle className="h-8 w-8 text-destructive" />
+    <div role="status" aria-live="polite" className="flex w-full justify-start">
+      <div className="min-w-0 max-w-[min(680px,88%)]">
+        <div className="mb-1.5 flex items-center gap-2 px-1 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground/80">Assistant</span>
+          <span className="h-1 w-1 rounded-full bg-muted-foreground/50" aria-hidden="true" />
+          <span>Interrupted</span>
         </div>
 
-        {/* Message */}
-        <div className="space-y-2">
-          <h3 className="text-lg font-semibold text-foreground">
-            Something went wrong
-          </h3>
-          <p className="text-sm text-muted-foreground max-w-md">
-            {error}
-          </p>
-        </div>
+        <div className="rounded-[8px] border border-border/80 bg-card/90 px-3.5 py-3 shadow-sm">
+          <div className="flex gap-3">
+            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px] bg-muted text-muted-foreground">
+              <AlertTriangle className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">This response stopped</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">{summary}</p>
+            </div>
+          </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-3">
-          <Button
-            onClick={reset}
-            className="gap-2 rounded-[7px] cursor-pointer transition-smooth"
-          >
-            <RotateCcw className="h-4 w-4" />
-            Try Again
-          </Button>
-          <Button
-            variant="outline"
-            className="gap-2 rounded-[7px] cursor-pointer transition-smooth"
-            asChild
-          >
-            <a
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
+          {diagnosticItems.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5 pl-10">
+              {diagnosticItems.map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => {
+                    void copyDiagnostic(item.value);
+                  }}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-[7px] border border-border bg-background px-2 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-muted"
+                  title={`Copy ${item.label}`}
+                >
+                  <span className="shrink-0 font-medium text-foreground/80">{item.label}</span>
+                  <code className="max-w-[180px] truncate font-mono text-[11px] text-muted-foreground">
+                    {item.value}
+                  </code>
+                  {copiedValue === item.value ? (
+                    <Check className="h-3 w-3 shrink-0" />
+                  ) : (
+                    <Copy className="h-3 w-3 shrink-0" />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 pl-10">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={!onRetry}
+              onClick={onRetry}
+              className="h-8 rounded-[7px] px-2.5"
             >
-              <HelpCircle className="h-4 w-4" />
-              Get Help
-            </a>
-          </Button>
-        </div>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Try again
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={!onDirectAnswer}
+              onClick={onDirectAnswer}
+              className="h-8 rounded-[7px] px-2.5"
+            >
+              <MessageCircle className="h-3.5 w-3.5" />
+              Direct answer
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-expanded={isDetailsOpen}
+              onClick={() => setDetailsOpen((open) => !open)}
+              className="h-8 rounded-[7px] px-2.5"
+            >
+              <ChevronDown
+                className={cn(
+                  'h-3.5 w-3.5 transition-transform',
+                  isDetailsOpen && 'rotate-180',
+                )}
+              />
+              Details
+            </Button>
+          </div>
 
-        {/* Suggestions */}
-        <div className="w-full max-w-md pt-4 border-t border-border/50">
-          <p className="text-xs text-muted-foreground mb-3">
-            Common solutions:
-          </p>
-          <ul className="text-xs text-muted-foreground space-y-1.5 text-left">
-            <li className="flex items-start gap-2">
-              <span className="text-foreground">-</span>
-              Check your internet connection
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-foreground">-</span>
-              Try a simpler or more specific query
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-foreground">-</span>
-              Wait a moment and try again
-            </li>
-          </ul>
+          {isDetailsOpen && (
+            <pre className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap rounded-[7px] bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+              {error}
+            </pre>
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+function getFriendlyErrorSummary(error: string): string {
+  const normalized = error.trim();
+  const lower = normalized.toLowerCase();
+
+  if (lower.includes('authentication') || lower.includes('token') || lower.includes('unauthorized')) {
+    return 'Your session could not be verified. Refresh the page or sign in again before retrying.';
+  }
+
+  if (lower.includes('json') || lower.includes('plan')) {
+    return 'The model returned a format the app could not read. Retry, or skip planning and answer directly.';
+  }
+
+  if (lower.includes('network') || lower.includes('fetch') || lower.includes('connection')) {
+    return 'The connection dropped before the answer finished. Your question is still here.';
+  }
+
+  return 'The answer did not finish. You can retry from the same question or continue without a plan.';
 }

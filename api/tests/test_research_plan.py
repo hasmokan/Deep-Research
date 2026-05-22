@@ -482,6 +482,41 @@ class ResearchPlanGenerationTests(IsolatedAsyncioTestCase):
         self.assertFalse(result["should_plan"])
         self.assertEqual(result["reason"], "Direct coding request.")
 
+    async def test_plan_need_assessment_falls_back_when_model_returns_non_json(self):
+        from agents.nodes import plan
+
+        class FakeResponse:
+            content = "# 刷机的用途\n\n刷机可以升级系统、救砖、获取 root 权限。"
+
+        class FakeChain:
+            async def ainvoke(self, payload):
+                self.payload = payload
+                return FakeResponse()
+
+        class FakePrompt:
+            def __or__(self, llm):
+                return FakeChain()
+
+        fake_settings = type(
+            "Settings",
+            (),
+            {
+                "openai_api_key": "api-key",
+                "openai_base_url": "https://api.example.test/v1",
+                "llm_model": "test-model",
+            },
+        )()
+
+        with (
+            patch.object(plan, "settings", fake_settings),
+            patch.object(plan.ChatPromptTemplate, "from_messages", return_value=FakePrompt()),
+            patch.object(plan, "ChatOpenAI"),
+        ):
+            result = await plan.assess_research_plan_need("刷机有什么用")
+
+        self.assertFalse(result["should_plan"])
+        self.assertEqual(result["reason"], "This request can be answered directly.")
+
 
 def _parse_sse_events(text: str) -> list[dict]:
     events = []

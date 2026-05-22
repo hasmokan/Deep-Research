@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts
+from agents.token_usage import TokenUsageAccumulator, extract_token_usage
 from services.langfuse_observability import ainvoke_langchain, astream_langchain, get_langfuse_tracer
 
 settings = get_settings()
@@ -36,12 +37,16 @@ async def analyze_node(state: dict[str, Any]) -> dict[str, Any]:
     config = _langchain_config("analyze-llm", len(documents))
     response = await ainvoke_langchain(chain, payload, config)
     content, thinking = extract_response_parts(response)
+    token_usage = extract_token_usage(response)
 
-    return {
+    result = {
         "analysis": content,
         "analysis_thinking": thinking,
         "analysis_completed": True
     }
+    if token_usage:
+        result["token_usage"] = token_usage
+    return result
 
 
 async def stream_analyze_node(state: dict[str, Any]):
@@ -64,9 +69,18 @@ async def stream_analyze_node(state: dict[str, Any]):
     config = _langchain_config("analyze-llm", len(documents))
     content_parts: list[str] = []
     thinking_parts: list[str] = []
+    token_usage = TokenUsageAccumulator()
 
     stream = astream_langchain(chain, payload, config)
     async for chunk in stream:
+        usage = token_usage.account_message(chunk)
+        if usage:
+            yield {
+                "type": "token_usage",
+                "id": getattr(chunk, "id", None) or "analysis-llm",
+                "usage": usage,
+            }
+
         content_delta, thinking_delta = extract_response_delta_parts(chunk)
 
         if thinking_delta:
@@ -105,13 +119,17 @@ async def stream_analyze_node(state: dict[str, Any]):
             "text": thinking,
         }
 
+    final_state = {
+        "analysis": content,
+        "analysis_thinking": thinking,
+        "analysis_completed": True,
+    }
+    if token_usage.usage:
+        final_state["token_usage"] = token_usage.usage
+
     yield {
         "type": "final",
-        "state": {
-            "analysis": content,
-            "analysis_thinking": thinking,
-            "analysis_completed": True,
-        },
+        "state": final_state,
     }
 
 
@@ -122,6 +140,7 @@ def _build_analysis_chain():
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
         extra_body={"reasoning_split": True},
+        stream_usage=True,
     )
     prompt = ChatPromptTemplate.from_messages([
         ("system", """You are a research analyst. Analyze the provided documents and extract key insights related to the user's query.

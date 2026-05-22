@@ -17,6 +17,7 @@ from langchain_openai import ChatOpenAI
 
 from agents.nodes.reasoning import extract_response_parts
 from agents.nodes.web_search import web_search_node
+from agents.token_usage import extract_token_usage
 from agents.skills import (
     AgentSkill,
     filter_tools_by_skill_allowed_tools,
@@ -160,6 +161,7 @@ def _build_model(skills: list[AgentSkill] | None = None) -> Any:
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
         extra_body={"reasoning_split": True},
+        stream_usage=True,
     )
     return llm.bind_tools(available_react_tools_for_skills(skills or []))
 
@@ -218,13 +220,17 @@ async def _run_builtin_tool(name: str, args: dict[str, Any]) -> Any:
 def _serialize_ai_message(message: Any) -> dict[str, Any]:
     content, reasoning = extract_response_parts(message)
     explicit_reasoning = _reasoning_from_additional_kwargs(getattr(message, "additional_kwargs", None))
-    return {
+    payload = {
         "type": "ai",
         "id": getattr(message, "id", None),
         "content": content,
         "reasoning_content": explicit_reasoning or reasoning or "",
         "tool_calls": [_serialize_tool_call(tool_call) for tool_call in list(getattr(message, "tool_calls", None) or [])],
     }
+    token_usage = extract_token_usage(message)
+    if token_usage:
+        payload["usage_metadata"] = token_usage
+    return payload
 
 
 def _reasoning_from_additional_kwargs(additional_kwargs: Any) -> str:

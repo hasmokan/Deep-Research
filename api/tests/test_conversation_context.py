@@ -2,7 +2,7 @@
 
 import asyncio
 from unittest import TestCase
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -83,20 +83,37 @@ class ConversationResearchRouteTests(TestCase):
         self.memory_patcher.stop()
 
     def test_execute_research_uses_contextual_query_and_returns_display_query(self):
+        from agents.research_stream import format_sse_event
         from routers import research
 
-        agent = AsyncMock(return_value={
-            "query": "contextual query",
-            "documents": [],
-            "analysis": "analysis",
-            "analysis_thinking": None,
-            "report": "report",
-            "report_thinking": None,
-            "report_completed": True,
-        })
+        seen = {}
+
+        async def fake_stream(
+            query,
+            run_id=None,
+            display_query=None,
+            store=None,
+            latest_result=None,
+            execution_mode="auto",
+            on_complete=None,
+        ):
+            seen["query"] = query
+            seen["display_query"] = display_query
+            seen["latest_result"] = latest_result
+            seen["execution_mode"] = execution_mode
+            payload = {
+                "query": display_query,
+                "documents": [],
+                "analysis": "analysis",
+                "analysis_thinking": None,
+                "report": "report",
+                "report_thinking": None,
+                "status": "completed",
+            }
+            yield format_sse_event("complete", payload)
 
         with (
-            patch.object(research.research_agent, "ainvoke", agent),
+            patch.object(research, "stream_research_events", fake_stream),
             patch.object(research, "research_memory_store", TopicMemoryStore()),
         ):
             result = asyncio.run(
@@ -112,17 +129,24 @@ class ConversationResearchRouteTests(TestCase):
                 )
             )
 
-        state = agent.await_args.args[0]
-        self.assertIn("Previous conversation context:", state["query"])
-        self.assertIn("Current user request:\n展开第三点", state["query"])
-        self.assertEqual(state["display_query"], "展开第三点")
+        self.assertIn("Previous conversation context:", seen["query"])
+        self.assertIn("Current user request:\n展开第三点", seen["query"])
+        self.assertEqual(seen["display_query"], "展开第三点")
         self.assertEqual(result["query"], "展开第三点")
 
     def test_stream_post_accepts_history_messages(self):
         from agents.research_stream import format_sse_event
         from routers import research
 
-        async def fake_stream(query, run_id=None, display_query=None, store=None, latest_result=None, on_complete=None):
+        async def fake_stream(
+            query,
+            run_id=None,
+            display_query=None,
+            store=None,
+            latest_result=None,
+            execution_mode="auto",
+            on_complete=None,
+        ):
             self.assertIn("Previous conversation context:", query)
             self.assertEqual(display_query, "展开第三点")
             self.assertIsNone(latest_result)

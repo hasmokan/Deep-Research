@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from core.config import get_settings
+from services.request_tracing import current_request_id
 from supabase import Client, create_client
 
 
@@ -29,19 +30,23 @@ class JsonlResearchRunStore:
     def create_run(self, query: str, user_id: str) -> dict[str, Any]:
         run_id = f"run-{uuid.uuid4()}"
         timestamp = self._now()
+        trace_id = current_request_id()
+        metadata = {
+            "run_id": run_id,
+            "user_id": user_id,
+            "query": query,
+            "status": "running",
+            "created_at": timestamp,
+        }
+        if trace_id:
+            metadata["trace_id"] = trace_id
         self.append_event(
             run_id,
             "metadata",
-            {
-                "run_id": run_id,
-                "user_id": user_id,
-                "query": query,
-                "status": "running",
-                "created_at": timestamp,
-            },
+            metadata,
             created_at=timestamp,
         )
-        return {
+        run = {
             "run_id": run_id,
             "user_id": user_id,
             "query": query,
@@ -49,6 +54,9 @@ class JsonlResearchRunStore:
             "created_at": timestamp,
             "updated_at": timestamp,
         }
+        if trace_id:
+            run["trace_id"] = trace_id
+        return run
 
     def append_event(
         self,
@@ -96,6 +104,7 @@ class JsonlResearchRunStore:
             "user_id": user_id,
             "query": metadata_data.get("query", ""),
             "status": status,
+            "trace_id": metadata_data.get("trace_id"),
             "created_at": metadata_data.get("created_at") or events[0].get("created_at"),
             "updated_at": events[-1].get("created_at"),
             "events": events,
@@ -155,6 +164,7 @@ class SupabaseResearchRunStore:
     def create_run(self, query: str, user_id: str) -> dict[str, Any]:
         run_id = f"run-{uuid.uuid4()}"
         timestamp = _now()
+        trace_id = current_request_id()
         run = {
             "run_id": run_id,
             "user_id": user_id,
@@ -164,18 +174,23 @@ class SupabaseResearchRunStore:
             "updated_at": timestamp,
         }
         self.supabase.table("research_runs").insert(_jsonable(run)).execute()
+        metadata = {
+            "run_id": run_id,
+            "user_id": user_id,
+            "query": query,
+            "status": "running",
+            "created_at": timestamp,
+        }
+        if trace_id:
+            metadata["trace_id"] = trace_id
         self.append_event(
             run_id,
             "metadata",
-            {
-                "run_id": run_id,
-                "user_id": user_id,
-                "query": query,
-                "status": "running",
-                "created_at": timestamp,
-            },
+            metadata,
             created_at=timestamp,
         )
+        if trace_id:
+            run["trace_id"] = trace_id
         return run
 
     def append_event(
@@ -237,6 +252,7 @@ class SupabaseResearchRunStore:
             "user_id": user_id,
             "query": run.get("query") or metadata_data.get("query", ""),
             "status": status,
+            "trace_id": metadata_data.get("trace_id"),
             "created_at": run.get("created_at") or metadata_data.get("created_at") or events[0].get("created_at"),
             "updated_at": run.get("updated_at") or events[-1].get("created_at"),
             "events": events,

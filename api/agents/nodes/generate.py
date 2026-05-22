@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts
+from agents.token_usage import TokenUsageAccumulator, add_token_usage, extract_token_usage, normalize_token_usage
 from services.langfuse_observability import ainvoke_langchain, astream_langchain, get_langfuse_tracer
 
 settings = get_settings()
@@ -38,12 +39,22 @@ async def generate_node(state: dict[str, Any]) -> dict[str, Any]:
     config = _langchain_config("report-llm", documents_count)
     response = await ainvoke_langchain(chain, payload, config)
     content, thinking = extract_response_parts(response)
+    previous_token_usage = normalize_token_usage(state.get("token_usage"))
+    response_token_usage = extract_token_usage(response)
+    token_usage = (
+        add_token_usage(previous_token_usage, response_token_usage)
+        if previous_token_usage or response_token_usage
+        else None
+    )
 
-    return {
+    result = {
         "report": content,
         "report_thinking": thinking,
         "report_completed": True
     }
+    if token_usage:
+        result["token_usage"] = token_usage
+    return result
 
 
 async def stream_generate_node(state: dict[str, Any]):
@@ -68,9 +79,18 @@ async def stream_generate_node(state: dict[str, Any]):
     config = _langchain_config("report-llm", documents_count)
     content_parts: list[str] = []
     thinking_parts: list[str] = []
+    token_usage = TokenUsageAccumulator()
 
     stream = astream_langchain(chain, payload, config)
     async for chunk in stream:
+        usage = token_usage.account_message(chunk)
+        if usage:
+            yield {
+                "type": "token_usage",
+                "id": getattr(chunk, "id", None) or "report-llm",
+                "usage": usage,
+            }
+
         content_delta, thinking_delta = extract_response_delta_parts(chunk)
 
         if thinking_delta:
@@ -109,13 +129,17 @@ async def stream_generate_node(state: dict[str, Any]):
             "text": thinking,
         }
 
+    final_state = {
+        "report": content,
+        "report_thinking": thinking,
+        "report_completed": True,
+    }
+    if token_usage.usage:
+        final_state["token_usage"] = token_usage.usage
+
     yield {
         "type": "final",
-        "state": {
-            "report": content,
-            "report_thinking": thinking,
-            "report_completed": True,
-        },
+        "state": final_state,
     }
 
 
@@ -126,6 +150,7 @@ def _build_generate_chain():
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
         extra_body={"reasoning_split": True},
+        stream_usage=True,
     )
     prompt = ChatPromptTemplate.from_messages([
         ("system", """You are a professional research report writer. Create a comprehensive, well-structured research report based on the analysis provided.

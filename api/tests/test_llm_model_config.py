@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from core.config import get_settings
 from models.schemas import ResearchRequest
@@ -105,6 +105,7 @@ class LlmNodeModelTests(TestCase):
             api_key="api-key",
             base_url="https://api.example.test/v1",
             extra_body={"reasoning_split": True},
+            stream_usage=True,
         )
 
     def test_analyze_node_returns_reasoning_details_separately(self):
@@ -247,6 +248,7 @@ class LlmNodeModelTests(TestCase):
             api_key="api-key",
             base_url="https://api.example.test/v1",
             extra_body={"reasoning_split": True},
+            stream_usage=True,
         )
 
     def test_generate_node_strips_embedded_think_tags(self):
@@ -367,19 +369,31 @@ class LlmNodeModelTests(TestCase):
 
 class ResearchRouterThinkingTests(TestCase):
     def test_execute_research_returns_thinking_fields(self):
+        from agents.research_stream import format_sse_event
         from routers import research
         from services.auth import AuthenticatedUser
 
-        with (
-            patch.object(research.research_agent, "ainvoke", new=AsyncMock(return_value={
-                "query": "test query",
+        async def fake_stream(
+            query,
+            run_id=None,
+            display_query=None,
+            store=None,
+            latest_result=None,
+            execution_mode="auto",
+            on_complete=None,
+        ):
+            yield format_sse_event("complete", {
+                "query": display_query,
                 "documents": [],
                 "analysis": "analysis answer",
                 "analysis_thinking": "analysis thinking",
                 "report": "report answer",
                 "report_thinking": "report thinking",
-                "report_completed": True,
-            })),
+                "status": "completed",
+            })
+
+        with (
+            patch.object(research, "stream_research_events", fake_stream),
             patch.object(research, "research_memory_store", EmptyMemoryStore()),
         ):
             result = asyncio.run(

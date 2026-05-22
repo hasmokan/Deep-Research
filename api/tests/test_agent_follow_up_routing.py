@@ -384,70 +384,23 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
 
 
 class FollowUpResearchRouteTests(TestCase):
-    def test_research_graph_resolves_follow_up_before_routing(self):
-        from agents import research_agent
-
-        classifier_states = []
-
-        async def fake_resolve_node(state):
-            return {
-                "resolved_query": "What is hasmokan's Codeforces rating?",
-                "search_query": "hasmokan Codeforces rating",
-                "context_resolution": {
-                    "used_context": True,
-                    "reason": "Resolved from prior turn.",
-                },
-            }
-
-        async def fake_classify_node(state):
-            classifier_states.append(dict(state))
-            return {"intent": "new_research", "reason": "needs search"}
-
-        async def fake_web_search_node(state):
-            return {"documents": [], "web_search_completed": True}
-
-        initial_state = {
-            "query": (
-                "Use the previous conversation context only when it is necessary.\n\n"
-                "Previous conversation context:\n"
-                "user: 谁是hasmokan\n\n"
-                "Current user request:\n"
-                "所以他在 codeforce 上多少分"
-            ),
-            "display_query": "所以他在 codeforce 上多少分",
-            "documents": [],
-            "analysis": None,
-            "analysis_thinking": None,
-            "report": None,
-            "report_thinking": None,
-            "latest_result": None,
-            "intent": None,
-            "answer": None,
-            "result_type": "report",
-            "web_search_completed": False,
-            "analysis_completed": False,
-            "report_completed": False,
-        }
-
-        with (
-            patch.object(research_agent, "resolve_research_query_node", fake_resolve_node, create=True),
-            patch.object(research_agent, "classify_research_intent_node", fake_classify_node),
-            patch.object(research_agent, "web_search_node", fake_web_search_node),
-        ):
-            graph = research_agent.build_research_graph()
-            asyncio.run(graph.ainvoke(initial_state))
-
-        self.assertEqual(classifier_states[-1]["resolved_query"], "What is hasmokan's Codeforces rating?")
-
     def test_execute_research_passes_latest_result_to_agent_state(self):
+        from agents.research_stream import format_sse_event
         from routers import research
         from services.auth import AuthenticatedUser
 
-        async def fake_ainvoke(state):
-            self.assertEqual(state["latest_result"]["query"], LATEST_RESULT["query"])
-            return {
-                "query": state["query"],
-                "display_query": state["display_query"],
+        async def fake_stream(
+            query,
+            run_id=None,
+            display_query=None,
+            store=None,
+            latest_result=None,
+            execution_mode="auto",
+            on_complete=None,
+        ):
+            self.assertEqual(latest_result["query"], LATEST_RESULT["query"])
+            yield format_sse_event("complete", {
+                "query": display_query,
                 "documents": LATEST_RESULT["documents"],
                 "analysis": None,
                 "analysis_thinking": None,
@@ -455,11 +408,11 @@ class FollowUpResearchRouteTests(TestCase):
                 "report_thinking": None,
                 "answer": "来源：https://example.com/report",
                 "result_type": "answer",
-                "report_completed": True,
-            }
+                "status": "completed",
+            })
 
         with (
-            patch.object(research.research_agent, "ainvoke", side_effect=fake_ainvoke),
+            patch.object(research, "stream_research_events", fake_stream),
             patch.object(research, "research_memory_store", EmptyMemoryStore()),
         ):
             result = asyncio.run(

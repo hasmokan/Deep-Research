@@ -8,14 +8,17 @@ import type {
   ResearchStreamStatus,
   ResearchStreamThinking,
   ResearchStreamTrace,
+  TokenUsage,
 } from '@/lib/api/types';
 import type { ResearchPlan } from './research-workflow';
+import { addEstimatedTokenUsageFromText, type TokenUsageDirection } from './token-usage.ts';
 
 export type ConversationRole = 'user' | 'assistant';
 export type ResearchActivityStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface ConversationResearchActivity {
   runId?: string;
+  traceId?: string | null;
   query: string;
   status: ResearchActivityStatus;
   streamStatuses: ResearchStreamStatus[];
@@ -23,6 +26,9 @@ export interface ConversationResearchActivity {
   streamDocuments: Document[];
   streamTrace: ResearchStreamTrace[];
   streamAgentMessages: AgentMessage[];
+  tokenUsage?: TokenUsage | null;
+  liveTokenUsage?: TokenUsage | null;
+  isTokenUsageEstimated?: boolean;
   startedAt: string;
   updatedAt: string;
 }
@@ -204,6 +210,19 @@ function isAnswerDeltaEventData(value: unknown): value is { delta: string } {
   return typeof (value as { delta?: unknown }).delta === 'string';
 }
 
+function isTokenUsage(value: unknown): value is TokenUsage {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const usage = value as Partial<TokenUsage>;
+  return (
+    typeof usage.input_tokens === 'number' &&
+    typeof usage.output_tokens === 'number' &&
+    typeof usage.total_tokens === 'number'
+  );
+}
+
 function getMessageRequestContent(message: ConversationMessage) {
   if (message.result) {
     return getAssistantResultContent(message.result);
@@ -260,6 +279,9 @@ export function createAssistantResearchActivityMessage(
       streamDocuments: [],
       streamTrace: [],
       streamAgentMessages: [],
+      tokenUsage: null,
+      liveTokenUsage: null,
+      isTokenUsageEstimated: false,
       startedAt: timestamp,
       updatedAt: timestamp,
     },
@@ -291,6 +313,14 @@ export function setResearchActivityRunId(
   runId: string,
   now: string = getNow(),
 ): ConversationMessage {
+  return setResearchActivityRunMetadata(message, { run_id: runId }, now);
+}
+
+export function setResearchActivityRunMetadata(
+  message: ConversationMessage,
+  metadata: { run_id: string; trace_id?: string | null },
+  now: string = getNow(),
+): ConversationMessage {
   if (!message.researchActivity) {
     return message;
   }
@@ -299,7 +329,8 @@ export function setResearchActivityRunId(
     ...message,
     researchActivity: {
       ...message.researchActivity,
-      runId,
+      runId: metadata.run_id,
+      traceId: metadata.trace_id ?? message.researchActivity.traceId ?? null,
       updatedAt: now,
     },
   };
@@ -385,6 +416,60 @@ export function appendResearchActivityAgentMessage(
   };
 }
 
+export function appendResearchActivityTokenUsage(
+  message: ConversationMessage,
+  tokenUsage: TokenUsage,
+  now: string = getNow(),
+): ConversationMessage {
+  if (!message.researchActivity) {
+    return message;
+  }
+
+  return {
+    ...message,
+    result: message.result
+      ? {
+          ...message.result,
+          token_usage: tokenUsage,
+        }
+      : message.result,
+    researchActivity: {
+      ...message.researchActivity,
+      tokenUsage,
+      liveTokenUsage: tokenUsage,
+      isTokenUsageEstimated: false,
+      updatedAt: now,
+    },
+  };
+}
+
+export function appendResearchActivityEstimatedTokenUsage(
+  message: ConversationMessage,
+  text: string,
+  direction: TokenUsageDirection,
+  now: string = getNow(),
+): ConversationMessage {
+  if (!message.researchActivity || !text.trim()) {
+    return message;
+  }
+
+  const liveTokenUsage = addEstimatedTokenUsageFromText(
+    message.researchActivity.liveTokenUsage ?? message.researchActivity.tokenUsage,
+    text,
+    direction,
+  );
+
+  return {
+    ...message,
+    researchActivity: {
+      ...message.researchActivity,
+      liveTokenUsage,
+      isTokenUsageEstimated: true,
+      updatedAt: now,
+    },
+  };
+}
+
 export function appendAssistantAnswerDelta(
   message: ConversationMessage,
   delta: string,
@@ -411,6 +496,7 @@ export function appendAssistantAnswerDelta(
       report_thinking: message.result?.report_thinking,
       answer,
       result_type: 'answer',
+      token_usage: message.result?.token_usage ?? message.researchActivity?.tokenUsage,
       status: 'running',
     },
     researchActivity: message.researchActivity
@@ -429,10 +515,16 @@ export function completeResearchActivityMessage(
   now: string = getNow(),
 ): ConversationMessage {
   const isAnswer = result.result_type === 'answer';
+  const resultWithTokenUsage = result.token_usage || !message.researchActivity?.tokenUsage
+    ? result
+    : {
+        ...result,
+        token_usage: message.researchActivity.tokenUsage,
+      };
 
   if (!message.researchActivity) {
     return {
-      ...createAssistantResultMessage(result),
+      ...createAssistantResultMessage(resultWithTokenUsage),
       id: message.id,
       createdAt: message.createdAt,
     };
@@ -441,11 +533,16 @@ export function completeResearchActivityMessage(
   if (isAnswer) {
     return {
       ...message,
-      content: result.answer || `Answered from the previous report for "${result.query}".`,
-      result,
+      content: resultWithTokenUsage.answer || `Answered from the previous report for "${resultWithTokenUsage.query}".`,
+      result: resultWithTokenUsage,
       researchActivity: {
         ...message.researchActivity,
         status: 'completed',
+        tokenUsage: resultWithTokenUsage.token_usage ?? message.researchActivity.tokenUsage,
+        liveTokenUsage: resultWithTokenUsage.token_usage
+          ?? message.researchActivity.tokenUsage
+          ?? message.researchActivity.liveTokenUsage,
+        isTokenUsageEstimated: !resultWithTokenUsage.token_usage && !message.researchActivity.tokenUsage,
         updatedAt: now,
       },
     };
@@ -453,11 +550,16 @@ export function completeResearchActivityMessage(
 
   return {
     ...message,
-    content: `Research report generated for "${result.query}".`,
-    result,
+    content: `Research report generated for "${resultWithTokenUsage.query}".`,
+    result: resultWithTokenUsage,
     researchActivity: {
       ...message.researchActivity,
       status: 'completed',
+      tokenUsage: resultWithTokenUsage.token_usage ?? message.researchActivity.tokenUsage,
+      liveTokenUsage: resultWithTokenUsage.token_usage
+        ?? message.researchActivity.tokenUsage
+        ?? message.researchActivity.liveTokenUsage,
+      isTokenUsageEstimated: !resultWithTokenUsage.token_usage && !message.researchActivity.tokenUsage,
       updatedAt: now,
     },
   };
@@ -507,11 +609,15 @@ export function applyResearchRunToActivityMessage(
     researchActivity: {
       ...message.researchActivity,
       runId: run.run_id,
+      traceId: run.trace_id ?? message.researchActivity.traceId ?? null,
       streamStatuses: [],
       streamThinking: [],
       streamDocuments: [],
       streamTrace: [],
       streamAgentMessages: [],
+      tokenUsage: null,
+      liveTokenUsage: null,
+      isTokenUsageEstimated: false,
       updatedAt: runUpdatedAt,
     },
   };
@@ -557,6 +663,10 @@ function applyResearchRunEvent(
 
   if (event.event === 'answer_delta' && isAnswerDeltaEventData(event.data)) {
     return appendAssistantAnswerDelta(message, event.data.delta, updatedAt);
+  }
+
+  if (event.event === 'token_usage' && isTokenUsage(event.data)) {
+    return appendResearchActivityTokenUsage(message, event.data, updatedAt);
   }
 
   if (event.event === 'complete' && isResearchResult(event.data)) {

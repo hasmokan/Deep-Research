@@ -133,6 +133,9 @@ function normalizeResearchActivity(activity: ConversationMessage['researchActivi
     streamDocuments: Array.isArray(activity.streamDocuments) ? activity.streamDocuments : [],
     streamTrace: Array.isArray(activity.streamTrace) ? activity.streamTrace : [],
     streamAgentMessages: Array.isArray(activity.streamAgentMessages) ? activity.streamAgentMessages : [],
+    tokenUsage: activity.tokenUsage ?? null,
+    liveTokenUsage: activity.liveTokenUsage ?? activity.tokenUsage ?? null,
+    isTokenUsageEstimated: Boolean(activity.isTokenUsageEstimated),
   };
 }
 

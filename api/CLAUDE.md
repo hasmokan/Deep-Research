@@ -16,7 +16,7 @@ Python backend development guidelines based on FastAPI + LangGraph + Supabase.
 api/
 ├── main.py                  # FastAPI application entry
 ├── agents/                  # LangGraph agents
-│   ├── research_agent.py   # Research agent
+│   ├── research_stream.py  # SSE research runtime
 │   └── nodes/              # Agent node functions
 │       ├── search.py
 │       ├── analyze.py
@@ -81,7 +81,7 @@ def fetch_data_sync(url: str) -> dict:  # Will block event loop
 ### State Definition
 
 ```python
-# agents/research_agent.py
+# agents/research_stream.py
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
 
@@ -111,8 +111,8 @@ async def search_node(state: ResearchState) -> dict:
 ### Graph Construction
 
 ```python
-# agents/research_agent.py
-def build_research_graph():
+# agents/research_stream.py
+def build_streaming_research_graph():
     graph = StateGraph(ResearchState)
 
     # Add nodes
@@ -137,7 +137,7 @@ def build_research_graph():
 
     return graph.compile()
 
-research_agent = build_research_graph()
+_streaming_research_graph = build_streaming_research_graph()
 ```
 
 ---
@@ -255,9 +255,10 @@ $$;
 
 ```python
 # routers/research.py
+import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from agents.research_agent import research_agent
+from agents.research_stream import stream_research_events
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -272,12 +273,10 @@ class ResearchResponse(BaseModel):
 @router.post("/", response_model=ResearchResponse)
 async def run_research(request: ResearchRequest):
     """Execute research query"""
-    result = await research_agent.ainvoke({
-        "query": request.query,
-        "documents": [],
-        "analysis": None,
-        "report": None
-    })
+    result = {}
+    async for event_text in stream_research_events(request.query):
+        if event_text.startswith("event: complete"):
+            result = json.loads(event_text.split("data: ", 1)[1])
 
     return ResearchResponse(
         query=result["query"],
@@ -297,17 +296,8 @@ import json
 async def stream_research(request: ResearchRequest):
     """Stream research results"""
     async def generate():
-        async for event in research_agent.astream_events(
-            {
-                "query": request.query,
-                "documents": [],
-                "analysis": None,
-                "report": None
-            },
-            version="v2"
-        ):
-            if event["event"] == "on_chain_end":
-                yield f"data: {json.dumps(event['data'])}\n\n"
+        async for event in stream_research_events(request.query):
+            yield event
 
     return StreamingResponse(
         generate(),
@@ -335,7 +325,8 @@ class AgentError(Exception):
 @router.post("/")
 async def run_research(request: ResearchRequest):
     try:
-        result = await research_agent.ainvoke(...)
+        async for event in stream_research_events(request.query):
+            ...
     except VectorStoreError as e:
         raise HTTPException(status_code=503, detail=f"Vector store unavailable: {e}")
     except AgentError as e:

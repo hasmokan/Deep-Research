@@ -91,6 +91,17 @@ class AgentSkillEnabledUpdate(BaseModel):
     enabled: bool
 
 
+class ClientErrorLogRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    source: str = Field(default="client", max_length=120)
+    level: Literal["info", "warning", "error"] = "error"
+    url: Optional[str] = Field(default=None, max_length=2000)
+    user_agent: Optional[str] = Field(default=None, max_length=1000)
+    request_id: Optional[str] = Field(default=None, max_length=120)
+    run_id: Optional[str] = Field(default=None, max_length=120)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 class DocumentResponse(BaseModel):
     id: int
     content: str

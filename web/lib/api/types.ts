@@ -37,6 +37,12 @@ export interface ResearchPlanResponse {
   should_plan: boolean;
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
 export interface ResearchResult {
   query: string;
   documents: Document[];
@@ -46,6 +52,7 @@ export interface ResearchResult {
   report_thinking?: string | null;
   answer?: string | null;
   result_type?: 'report' | 'answer';
+  token_usage?: TokenUsage | null;
   status: string;
 }
 
@@ -60,6 +67,7 @@ export interface ResearchRunEvent {
 export interface ResearchRun {
   user_id?: string;
   run_id: string;
+  trace_id?: string | null;
   query: string;
   status: string;
   created_at: string;
@@ -98,6 +106,18 @@ export interface AgentSkillUpsertRequest {
 
 export interface ResearchStreamMetadata {
   run_id: string;
+  trace_id?: string | null;
+}
+
+export interface ClientErrorLogRequest {
+  message: string;
+  source?: string;
+  level?: 'info' | 'warning' | 'error';
+  url?: string | null;
+  user_agent?: string | null;
+  request_id?: string | null;
+  run_id?: string | null;
+  context?: Record<string, unknown>;
 }
 
 export interface ResearchPlanStreamStatus {
@@ -158,6 +178,7 @@ export type AgentMessage =
       content: string;
       reasoning_content?: string | null;
       tool_calls?: AgentToolCall[];
+      usage_metadata?: TokenUsage | null;
     }
   | {
       type: 'tool';
@@ -178,6 +199,7 @@ export interface ResearchStreamHandlers {
   onReport?: (report: string | null) => void;
   onAnswerDelta?: (delta: string) => void;
   onAnswer?: (answer: string | null) => void;
+  onTokenUsage?: (usage: TokenUsage) => void;
   signal?: AbortSignal;
 }
 

@@ -3,7 +3,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from models.schemas import DocumentResponse, ResearchMemoryResponse, ResearchPlanResponse, ResearchRequest, ResearchResponse, ResearchThreadUpdate
-from agents.research_agent import research_agent
 from agents.research_stream import stream_research_events
 from agents.conversation_context import build_contextual_research_query
 from agents.nodes.plan import assess_research_plan_need, generate_research_plan
@@ -12,10 +11,12 @@ from services.auth import AuthenticatedUser, get_current_user
 from services.research_memories import build_memory_context, research_memory_store
 from services.research_runs import research_run_store
 from services.research_threads import research_thread_store
+from services.request_tracing import current_request_id, log_event, reset_request_id, set_request_id
 from services.vector_store import get_vector_store
 from datetime import datetime
 import asyncio
 import json
+import logging
 import uuid
 
 router = APIRouter(prefix="/api/research", tags=["research"])
@@ -161,16 +162,77 @@ def _persisted_event_to_sse(event: dict) -> str:
     return _format_sse_event(event_name, data)
 
 
+def _parse_sse_event_blocks(event_text: str) -> list[tuple[str, dict]]:
+    events: list[tuple[str, dict]] = []
+
+    for block in event_text.split("\n\n"):
+        event_name = "message"
+        data_lines: list[str] = []
+
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                event_name = line.removeprefix("event:").strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.removeprefix("data:").strip())
+
+        if not data_lines:
+            continue
+
+        payload = json.loads("\n".join(data_lines))
+        if isinstance(payload, dict):
+            events.append((event_name, payload))
+
+    return events
+
+
+async def _run_research_request_to_result(
+    contextual_query: str,
+    request: ResearchRequest,
+) -> dict:
+    completed_payload: dict | None = None
+
+    async def capture_complete(result: dict) -> None:
+        nonlocal completed_payload
+        completed_payload = result
+
+    async for event_text in stream_research_events(
+        contextual_query,
+        display_query=request.query,
+        latest_result=request.latest_result,
+        execution_mode=request.execution_mode,
+        on_complete=capture_complete,
+    ):
+        for event_name, payload in _parse_sse_event_blocks(event_text):
+            if event_name == "complete":
+                completed_payload = payload
+            elif event_name == "stream_error":
+                raise RuntimeError(payload.get("detail") or "Research stream failed")
+
+    if completed_payload is None:
+        raise RuntimeError("Research stream ended before completion")
+
+    return completed_payload
+
+
 async def _run_research_to_store(
     contextual_query: str,
     *,
     run_id: str,
     user_id: str,
+    trace_id: str | None = None,
     display_query: str | None = None,
     latest_result: dict | None = None,
     execution_mode: str = "auto",
 ) -> None:
+    token = set_request_id(trace_id) if trace_id else None
     try:
+        log_event(
+            "research_run_started",
+            run_id=run_id,
+            user_id=user_id,
+            query=display_query or contextual_query,
+            execution_mode=execution_mode,
+        )
         async for _event in stream_research_events(
             contextual_query,
             run_id=run_id,
@@ -181,15 +243,28 @@ async def _run_research_to_store(
             on_complete=lambda result: _remember_result(user_id, result),
         ):
             pass
+        log_event("research_run_finished", run_id=run_id, user_id=user_id)
     except asyncio.CancelledError:
-        research_run_store.append_event(run_id, "stopped", {"status": "stopped"})
+        research_run_store.append_event(run_id, "stopped", {"status": "stopped", "trace_id": trace_id})
+        log_event("research_run_stopped", level=logging.WARNING, run_id=run_id, user_id=user_id)
         raise
     except Exception as exc:
         research_run_store.append_event(
             run_id,
             "stream_error",
-            {"detail": f"Research execution failed: {exc}"},
+            {"detail": f"Research execution failed: {exc}", "trace_id": trace_id},
         )
+        log_event(
+            "research_run_failed",
+            level=logging.ERROR,
+            run_id=run_id,
+            user_id=user_id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+    finally:
+        if token is not None:
+            reset_request_id(token)
 
 
 def start_research_run_background(
@@ -197,15 +272,18 @@ def start_research_run_background(
     *,
     run_id: str,
     user_id: str,
+    trace_id: str | None = None,
     display_query: str | None = None,
     latest_result: dict | None = None,
     execution_mode: str = "auto",
 ) -> asyncio.Task:
+    trace_id = trace_id or current_request_id()
     task = asyncio.create_task(
         _run_research_to_store(
             contextual_query,
             run_id=run_id,
             user_id=user_id,
+            trace_id=trace_id,
             display_query=display_query,
             latest_result=latest_result,
             execution_mode=execution_mode,
@@ -254,10 +332,12 @@ async def stream_research(
     """
     user_id = _user_id(current_user)
     run = research_run_store.create_run(query, user_id=user_id)
+    log_event("research_run_created", run_id=run["run_id"], user_id=user_id, query=query)
     start_research_run_background(
         query,
         run_id=run["run_id"],
         user_id=user_id,
+        trace_id=run.get("trace_id"),
     )
 
     return StreamingResponse(
@@ -287,10 +367,12 @@ async def stream_research_post(
         memory_context=_memory_context_for_user(user_id),
     )
     run = research_run_store.create_run(request.query, user_id=user_id)
+    log_event("research_run_created", run_id=run["run_id"], user_id=user_id, query=request.query)
     start_research_run_background(
         contextual_query,
         run_id=run["run_id"],
         user_id=user_id,
+        trace_id=run.get("trace_id"),
         display_query=request.query,
         latest_result=request.latest_result,
         execution_mode=request.execution_mode,
@@ -422,39 +504,18 @@ async def create_research(
         Research response with ID, query, status, and document count
     """
     try:
+        user_id = _user_id(current_user)
         contextual_query = build_contextual_research_query(
             request.query,
             request.messages,
-            memory_context=_memory_context_for_user(_user_id(current_user)),
+            memory_context=_memory_context_for_user(user_id),
         )
-        initial_state = {
-            "query": contextual_query,
-            "display_query": request.query,
-            "documents": [],
-            "analysis": None,
-            "analysis_thinking": None,
-            "report": None,
-            "report_thinking": None,
-            "latest_result": request.latest_result,
-            "resolved_query": None,
-            "search_query": None,
-            "context_resolution": None,
-            "intent": None,
-            "answer": None,
-            "result_type": "report",
-            "web_search_completed": False,
-            "analysis_completed": False,
-            "report_completed": False
-        }
+        result = await _run_research_request_to_result(contextual_query, request)
 
-        # Execute research agent
-        result = await research_agent.ainvoke(initial_state)
-
-        # Generate response
         return ResearchResponse(
             id=str(uuid.uuid4()),
             query=request.query,
-            status="completed" if result.get("report_completed") else "failed",
+            status=result.get("status") or "failed",
             documents_count=len(result.get("documents", [])),
             created_at=datetime.utcnow().isoformat()
         )
@@ -487,41 +548,7 @@ async def execute_research(
             request.messages,
             memory_context=_memory_context_for_user(user_id),
         )
-        initial_state = {
-            "query": contextual_query,
-            "display_query": request.query,
-            "documents": [],
-            "analysis": None,
-            "analysis_thinking": None,
-            "report": None,
-            "report_thinking": None,
-            "latest_result": request.latest_result,
-            "resolved_query": None,
-            "search_query": None,
-            "context_resolution": None,
-            "intent": None,
-            "answer": None,
-            "result_type": "report",
-            "web_search_completed": False,
-            "analysis_completed": False,
-            "report_completed": False
-        }
-
-        # Execute research agent
-        result = await research_agent.ainvoke(initial_state)
-
-        # Return full results
-        result_payload = {
-            "query": request.query,
-            "documents": result.get("documents", []),
-            "analysis": result.get("analysis"),
-            "analysis_thinking": result.get("analysis_thinking"),
-            "report": result.get("report"),
-            "report_thinking": result.get("report_thinking"),
-            "answer": result.get("answer"),
-            "result_type": result.get("result_type") or "report",
-            "status": "completed" if result.get("report_completed") else "failed"
-        }
+        result_payload = await _run_research_request_to_result(contextual_query, request)
         _remember_result(user_id, result_payload)
         return result_payload
 

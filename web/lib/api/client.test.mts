@@ -8,6 +8,7 @@ import type {
   ResearchPlanStreamStatus,
   ResearchResult,
   ResearchStreamStatus,
+  TokenUsage,
 } from './types';
 
 test('streamResearchPlan reads status events and returns the completed plan', async () => {
@@ -88,6 +89,68 @@ test('request methods send the current bearer token', async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('request methods attach a request id header', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, 'http://api.test/api/research/threads');
+    const requestId = init?.headers && new Headers(init.headers).get('X-Request-ID');
+    assert.match(requestId ?? '', /^req-/);
+
+    return Response.json([]);
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+
+    await client.listResearchThreads();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('reportClientError posts diagnostics with request context', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method: string; body?: string | null; requestId: string | null }> = [];
+
+  globalThis.fetch = async (url, init) => {
+    calls.push({
+      url: String(url),
+      method: init?.method ?? 'GET',
+      body: init?.body?.toString() ?? null,
+      requestId: init?.headers ? new Headers(init.headers).get('X-Request-ID') : null,
+    });
+
+    return Response.json({ ok: true, request_id: 'trace-client' });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    client.setAccessTokenProvider(() => 'token-123');
+
+    await client.reportClientError({
+      message: 'Rendered report failed',
+      source: 'window.onerror',
+      level: 'error',
+      run_id: 'run-123',
+      context: { component: 'ReportSidebar' },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, 'http://api.test/api/diagnostics/client-error');
+  assert.equal(calls[0]?.method, 'POST');
+  assert.match(calls[0]?.requestId ?? '', /^req-/);
+  const body = JSON.parse(calls[0]?.body ?? '{}');
+  assert.equal(body.message, 'Rendered report failed');
+  assert.equal(body.source, 'window.onerror');
+  assert.equal(body.level, 'error');
+  assert.equal(body.run_id, 'run-123');
+  assert.deepEqual(body.context, { component: 'ReportSidebar' });
 });
 
 test('skill management methods call the skill endpoints', async () => {
@@ -353,6 +416,55 @@ test('streamResearch forwards answer deltas while preserving final result', asyn
     );
 
     assert.deepEqual(deltas, ['```python\n', 'print("ok")\n```']);
+    assert.deepEqual(streamedResult, result);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('streamResearch forwards token usage updates and returns final usage', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const tokenUsageUpdates: TokenUsage[] = [];
+  const tokenUsage: TokenUsage = {
+    input_tokens: 11,
+    output_tokens: 7,
+    total_tokens: 18,
+  };
+  const result: ResearchResult = {
+    query: '刷机有什么用',
+    documents: [],
+    analysis: null,
+    report: null,
+    answer: '刷机可以更新系统、救砖或获得更多控制权。',
+    result_type: 'answer',
+    status: 'completed',
+    token_usage: tokenUsage,
+  };
+
+  globalThis.fetch = async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: token_usage\ndata: ${JSON.stringify(tokenUsage)}\n\n`));
+        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.close();
+      },
+    });
+
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    const streamedResult = await client.streamResearch(
+      { query: '刷机有什么用' },
+      { onTokenUsage: (usage) => tokenUsageUpdates.push(usage) },
+    );
+
+    assert.deepEqual(tokenUsageUpdates, [tokenUsage]);
     assert.deepEqual(streamedResult, result);
   } finally {
     globalThis.fetch = originalFetch;

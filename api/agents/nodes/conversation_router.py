@@ -11,6 +11,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts
+from agents.token_usage import TokenUsageAccumulator, extract_token_usage
 from runtime_sandbox.sandbox import LocalSandboxProvider
 from runtime_sandbox.sandbox.tools import SandboxToolRunner, sandbox_openai_tool_specs
 from services.langfuse_observability import ainvoke_langchain, astream_langchain, get_langfuse_tracer
@@ -176,22 +177,22 @@ async def answer_coding_node(state: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         pass
 
-    answer, thinking = await _answer_directly_with_llm(
+    answer, thinking, token_usage = await _answer_directly_with_llm(
         state,
         system_prompt=_CODING_ANSWER_PROMPT,
         temperature=0.2,
     )
-    return _answer_state(answer, thinking)
+    return _answer_state(answer, thinking, token_usage)
 
 
 async def answer_direct_node(state: dict[str, Any]) -> dict[str, Any]:
     """Answer simple informational requests directly without forcing a report."""
-    answer, thinking = await _answer_directly_with_llm(
+    answer, thinking, token_usage = await _answer_directly_with_llm(
         state,
         system_prompt=_DIRECT_ANSWER_PROMPT,
         temperature=0.2,
     )
-    return _answer_state(answer, thinking)
+    return _answer_state(answer, thinking, token_usage)
 
 
 async def stream_answer_coding_node(state: dict[str, Any]):
@@ -235,13 +236,14 @@ async def _answer_directly_with_llm(
     *,
     system_prompt: str,
     temperature: float,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, dict[str, int] | None]:
     llm = ChatOpenAI(
         model=settings.llm_model,
         temperature=temperature,
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
         extra_body={"reasoning_split": True},
+        stream_usage=True,
     )
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
@@ -254,7 +256,7 @@ async def _answer_directly_with_llm(
         _langchain_config("direct-answer-llm", "answer"),
     )
     answer, thinking = extract_response_parts(response)
-    return answer.strip(), thinking
+    return answer.strip(), thinking, extract_token_usage(response)
 
 
 async def _stream_direct_answer_with_llm(
@@ -272,6 +274,7 @@ async def _stream_direct_answer_with_llm(
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
         extra_body={"reasoning_split": True},
+        stream_usage=True,
     )
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
@@ -280,6 +283,7 @@ async def _stream_direct_answer_with_llm(
     chain = prompt | llm
     content_parts: list[str] = []
     thinking_parts: list[str] = []
+    token_usage = TokenUsageAccumulator()
 
     stream = astream_langchain(
         chain,
@@ -287,6 +291,14 @@ async def _stream_direct_answer_with_llm(
         _langchain_config("direct-answer-llm", "answer"),
     )
     async for chunk in stream:
+        usage = token_usage.account_message(chunk)
+        if usage:
+            yield {
+                "type": "token_usage",
+                "id": getattr(chunk, "id", None) or f"{stage}-llm",
+                "usage": usage,
+            }
+
         content_delta, thinking_delta = extract_response_delta_parts(chunk)
 
         if thinking_delta:
@@ -322,12 +334,12 @@ async def _stream_direct_answer_with_llm(
 
     yield {
         "type": "final",
-        "state": _answer_state(answer, thinking),
+        "state": _answer_state(answer, thinking, token_usage.usage),
     }
 
 
-def _answer_state(answer: str, thinking: str | None) -> dict[str, Any]:
-    return {
+def _answer_state(answer: str, thinking: str | None, token_usage: dict[str, int] | None = None) -> dict[str, Any]:
+    state = {
         "documents": [],
         "analysis": None,
         "analysis_thinking": None,
@@ -337,6 +349,9 @@ def _answer_state(answer: str, thinking: str | None) -> dict[str, Any]:
         "result_type": "answer",
         "report_completed": True,
     }
+    if token_usage:
+        state["token_usage"] = token_usage
+    return state
 
 
 async def _stream_sandbox_coding_with_tools(state: dict[str, Any]):
@@ -349,6 +364,7 @@ async def _stream_sandbox_coding_with_tools(state: dict[str, Any]):
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
         extra_body={"reasoning_split": True},
+        stream_usage=True,
     )
     model_with_tools = llm.bind_tools(sandbox_openai_tool_specs())
     query = _resolved_query(state)
@@ -359,12 +375,20 @@ async def _stream_sandbox_coding_with_tools(state: dict[str, Any]):
 
     final_answer = ""
     thinking = None
+    token_usage = TokenUsageAccumulator()
 
     for _ in range(4):
         response = await model_with_tools.ainvoke(
             messages,
             _langchain_config("sandbox-coding-llm", "coding"),
         )
+        usage = token_usage.account_message(response)
+        if usage:
+            yield {
+                "type": "token_usage",
+                "id": getattr(response, "id", None) or "sandbox-coding-llm",
+                "usage": usage,
+            }
         tool_calls = list(getattr(response, "tool_calls", None) or [])
 
         if not tool_calls:
@@ -377,7 +401,7 @@ async def _stream_sandbox_coding_with_tools(state: dict[str, Any]):
                 }
             yield {
                 "type": "final",
-                "state": _answer_state(final_answer, thinking),
+                "state": _answer_state(final_answer, thinking, token_usage.usage),
             }
             return
 
@@ -409,15 +433,79 @@ async def _stream_sandbox_coding_with_tools(state: dict[str, Any]):
             }
             messages.append(ToolMessage(content=json.dumps(result, ensure_ascii=False), tool_call_id=tool_call_id))
 
-    final_answer = "Sandbox tool execution reached the maximum number of tool rounds before a final answer."
+    messages.append(HumanMessage(content=_SANDBOX_FINAL_SYNTHESIS_PROMPT))
+
+    try:
+        response = await llm.ainvoke(
+            messages,
+            _langchain_config("sandbox-coding-final-synthesis", "coding_final_synthesis"),
+        )
+        usage = token_usage.account_message(response)
+        if usage:
+            yield {
+                "type": "token_usage",
+                "id": getattr(response, "id", None) or "sandbox-coding-final-synthesis",
+                "usage": usage,
+            }
+        final_answer, thinking = extract_response_parts(response)
+        final_answer = final_answer.strip()
+        if final_answer:
+            yield {
+                "type": "answer_delta",
+                "delta": final_answer,
+            }
+            yield {
+                "type": "final",
+                "state": _answer_state(final_answer, thinking, token_usage.usage),
+            }
+            return
+    except Exception:
+        pass
+
+    final_answer = _sandbox_observation_fallback(messages)
     yield {
         "type": "answer_delta",
         "delta": final_answer,
     }
     yield {
         "type": "final",
-        "state": _answer_state(final_answer, thinking),
+        "state": _answer_state(final_answer, thinking, token_usage.usage),
     }
+
+
+def _sandbox_observation_fallback(messages: list[Any]) -> str:
+    observations: list[str] = []
+
+    for message in messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        try:
+            payload = json.loads(str(message.content))
+        except json.JSONDecodeError:
+            payload = {"ok": True, "content": str(message.content)}
+        if not isinstance(payload, dict):
+            continue
+
+        tool_name = getattr(message, "name", None) or "tool"
+        if payload.get("ok") is False:
+            observations.append(f"- {tool_name} failed: {payload.get('error') or 'unknown error'}")
+            continue
+        if "content" in payload:
+            content = str(payload.get("content") or "").strip()
+            if content:
+                observations.append(f"- {tool_name} output: {content[:600]}")
+            else:
+                observations.append(f"- {tool_name} completed.")
+            continue
+        if "entries" in payload:
+            observations.append(f"- {tool_name} returned {len(payload.get('entries') or [])} entries.")
+            continue
+        if "matches" in payload:
+            observations.append(f"- {tool_name} returned {len(payload.get('matches') or [])} matches.")
+
+    if observations:
+        return "工具轮数已用完，但已经拿到这些沙箱执行结果：\n" + "\n".join(observations[-6:])
+    return "Sandbox tool execution reached the maximum number of tool rounds before a final answer."
 
 
 def _get_coding_sandbox_provider() -> LocalSandboxProvider:
@@ -469,6 +557,12 @@ Keep commands small and bounded. Do not access paths outside the sandbox workspa
 After tool use, summarize what you did and provide the final answer in the user's language."""
 
 
+_SANDBOX_FINAL_SYNTHESIS_PROMPT = """The sandbox tool budget is exhausted.
+
+Do not call any more tools. Use the tool observations already in the conversation to write the final answer in the user's language.
+Include the useful code/file names, command results, and any failures or limitations that matter."""
+
+
 _DIRECT_ANSWER_PROMPT = """You answer direct user questions without deep-research ceremony.
 
 Rules:
@@ -502,6 +596,7 @@ async def answer_from_artifact_node(state: dict[str, Any]) -> dict[str, Any]:
     report = latest_result.get("report") or latest_result.get("analysis")
     visible_query = _resolved_query(state) or state.get("display_query") or "这个问题"
     thinking = None
+    token_usage = None
 
     if not report:
         answer = "上一份研究结果里没有可复用的报告内容，需要重新做一次研究。"
@@ -513,6 +608,7 @@ async def answer_from_artifact_node(state: dict[str, Any]) -> dict[str, Any]:
             api_key=settings.openai_api_key,
             base_url=settings.openai_base_url,
             extra_body={"reasoning_split": True},
+            stream_usage=True,
         )
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You answer follow-up questions using only the previous research report.
@@ -538,9 +634,10 @@ Answer the follow-up directly."""),
         config = _langchain_config("artifact-follow-up-llm", "answer")
         response = await ainvoke_langchain(chain, payload, config)
         answer, thinking = extract_response_parts(response)
+        token_usage = extract_token_usage(response)
         result_type = "answer"
 
-    return {
+    result = {
         "documents": _document_list(latest_result),
         "analysis": None,
         "analysis_thinking": None,
@@ -550,6 +647,9 @@ Answer the follow-up directly."""),
         "result_type": result_type,
         "report_completed": True,
     }
+    if token_usage:
+        result["token_usage"] = token_usage
+    return result
 
 
 def _normalized_query(state: dict[str, Any]) -> str:
