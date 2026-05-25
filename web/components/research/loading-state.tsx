@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import {
   Activity,
+  BookOpen,
   Brain,
   ChevronDown,
   Code2,
@@ -104,6 +105,9 @@ function getDocumentUrl(document: Document | ResearchStreamTraceDocument) {
 }
 
 function EventIcon({ event, className }: { event: ResearchActivityEvent; className: string }) {
+  if (event.kind === 'skill') {
+    return <BookOpen className={className} />;
+  }
   if (event.stage === 'coding') {
     return <Code2 className={className} />;
   }
@@ -269,6 +273,11 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
               {event.kind === 'tool_call' && (
                 <span className="rounded-full border border-border/70 bg-muted/60 px-2 py-0.5 text-[11px] text-muted-foreground">
                   tool
+                </span>
+              )}
+              {event.kind === 'skill' && (
+                <span className="rounded-full border border-border/70 bg-muted/60 px-2 py-0.5 text-[11px] text-muted-foreground">
+                  skill
                 </span>
               )}
             </div>

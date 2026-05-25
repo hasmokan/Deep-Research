@@ -266,7 +266,7 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
         self.assertIn("partial answer", events[-1]["answer"])
         self.assertIn("Gathered source", events[-1]["answer"])
 
-    async def test_injects_skill_content_into_system_prompt(self):
+    async def test_exposes_skill_catalog_without_injecting_full_content(self):
         from agents.react_agent import stream_react_agent_messages
         from agents.skills import AgentSkill
 
@@ -300,7 +300,65 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(events[-1]["answer"], "Use source-backed identity checks.")
         self.assertIn("identity-research", captured_system_prompts[0])
-        self.assertIn("Prefer source-backed identity checks", captured_system_prompts[0])
+        self.assertIn("Identity research guidance.", captured_system_prompts[0])
+        self.assertNotIn("Prefer source-backed identity checks", captured_system_prompts[0])
+
+    async def test_load_skill_tool_injects_skill_content_on_next_model_call(self):
+        from agents.react_agent import stream_react_agent_messages
+        from agents.skills import AgentSkill
+
+        captured_system_prompts = []
+
+        class FakeModel:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages, config=None):
+                captured_system_prompts.append(messages[0].content)
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(
+                        id="ai-load-skill",
+                        content="",
+                        additional_kwargs={},
+                        tool_calls=[
+                            {
+                                "id": "call-load-skill",
+                                "name": "load_skill",
+                                "args": {"name": "identity-research"},
+                            }
+                        ],
+                    )
+                return SimpleNamespace(
+                    id="ai-final",
+                    content="Use source-backed identity checks.",
+                    additional_kwargs={},
+                    tool_calls=[],
+                )
+
+        events = [
+            event
+            async for event in stream_react_agent_messages(
+                "谁是 hasmokan",
+                model=FakeModel(),
+                skills=[
+                    AgentSkill(
+                        name="identity-research",
+                        description="Identity research guidance.",
+                        content="Prefer source-backed identity checks before answering.",
+                        allowed_tools=["web_search"],
+                    )
+                ],
+            )
+        ]
+
+        self.assertEqual([event["type"] for event in events], ["agent_message", "trace", "agent_message", "final"])
+        self.assertNotIn("Prefer source-backed identity checks", captured_system_prompts[0])
+        self.assertIn("Prefer source-backed identity checks", captured_system_prompts[1])
+        self.assertEqual(events[1]["kind"], "skill")
+        self.assertEqual(events[1]["title"], "Skill loaded")
+        self.assertEqual(events[1]["skills"][0]["name"], "identity-research")
+        self.assertEqual(events[-1]["answer"], "Use source-backed identity checks.")
 
     def test_filters_react_tools_with_skill_allowed_tools(self):
         from agents.react_agent import available_react_tools_for_skills
@@ -310,4 +368,4 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
             [AgentSkill(name="search-only", content="", allowed_tools=["web_search"])]
         )
 
-        self.assertEqual([tool.name for tool in tools], ["web_search"])
+        self.assertEqual([tool.name for tool in tools], ["load_skill", "web_search"])

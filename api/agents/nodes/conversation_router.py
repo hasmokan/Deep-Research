@@ -415,7 +415,7 @@ async def _stream_sandbox_coding_with_tools(state: dict[str, Any]):
                 "stage": "coding",
                 "kind": "tool_call",
                 "title": _sandbox_tool_title(tool_name),
-                "detail": f"Calling sandbox tool: {tool_name}",
+                "detail": _sandbox_tool_call_detail(tool_name, tool_args),
                 "tool": tool_name,
                 "arguments": tool_args,
                 "sandbox_id": sandbox_id,
@@ -426,7 +426,7 @@ async def _stream_sandbox_coding_with_tools(state: dict[str, Any]):
                 "stage": "coding",
                 "kind": "tool_result",
                 "title": _sandbox_tool_title(tool_name),
-                "detail": _sandbox_tool_result_detail(tool_name, result),
+                "detail": _sandbox_tool_result_detail(tool_name, result, tool_args),
                 "tool": tool_name,
                 "result": result,
                 "sandbox_id": sandbox_id,
@@ -527,17 +527,58 @@ def _sandbox_tool_title(tool_name: str) -> str:
     return titles.get(tool_name, tool_name or "Sandbox tool")
 
 
-def _sandbox_tool_result_detail(tool_name: str, result: dict[str, Any]) -> str:
+def _sandbox_tool_call_detail(tool_name: str, arguments: dict[str, Any]) -> str:
+    if tool_name == "bash":
+        return _clean_sandbox_trace_text(_argument_string(arguments, "command") or "Run shell command")
+    if tool_name == "read_file":
+        return f"Read {_argument_string(arguments, 'path') or 'file'}"
+    if tool_name == "write_file":
+        action = "Append to" if bool(arguments.get("append")) else "Write"
+        return f"{action} {_argument_string(arguments, 'path') or 'file'}"
+    if tool_name == "list_dir":
+        return f"List {_argument_string(arguments, 'path') or 'directory'}"
+    if tool_name == "glob":
+        pattern = _argument_string(arguments, "pattern") or "*"
+        path = _argument_string(arguments, "path") or "."
+        return f"Find {pattern} under {path}"
+    if tool_name == "grep":
+        pattern = _argument_string(arguments, "pattern") or "text"
+        path = _argument_string(arguments, "path") or "."
+        return f"Search {path} for {pattern}"
+    return json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+
+
+def _sandbox_tool_result_detail(
+    tool_name: str,
+    result: dict[str, Any],
+    arguments: dict[str, Any] | None = None,
+) -> str:
+    arguments = arguments or {}
     if not result.get("ok"):
         return f"{tool_name} failed: {result.get('error')}"
+    if tool_name == "write_file":
+        action = "Appended to" if bool(arguments.get("append")) else "Wrote"
+        return f"{action} {_argument_string(arguments, 'path') or 'file'}"
     if "content" in result:
         content = str(result.get("content") or "")
-        return content[:160] if content else f"{tool_name} completed."
+        return _clean_sandbox_trace_text(content) if content else f"{tool_name} completed."
     if "matches" in result:
         return f"{len(result.get('matches') or [])} matches returned."
     if "entries" in result:
         return f"{len(result.get('entries') or [])} entries returned."
     return f"{tool_name} completed."
+
+
+def _argument_string(arguments: dict[str, Any], key: str) -> str:
+    value = arguments.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _clean_sandbox_trace_text(value: str, limit: int = 220) -> str:
+    text = value.strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
 
 
 _CODING_ANSWER_PROMPT = """You are a pragmatic senior software engineer helping with coding tasks.

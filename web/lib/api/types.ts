@@ -154,15 +154,22 @@ export interface ResearchStreamTraceDocument {
   type?: string | null;
 }
 
+export interface ResearchStreamTraceSkill {
+  name: string;
+  description?: string | null;
+  path?: string | null;
+}
+
 export interface ResearchStreamTrace {
   id: string;
   stage: 'route' | 'react' | 'answer' | 'coding' | 'search' | 'analyze' | 'report';
-  kind: 'tool_call' | 'tool_result' | 'reasoning';
+  kind: 'tool_call' | 'tool_result' | 'reasoning' | 'skill';
   title: string;
   detail: string;
   tool?: string;
   query?: string;
   documents?: ResearchStreamTraceDocument[];
+  skills?: ResearchStreamTraceSkill[];
 }
 
 export interface AgentToolCall {

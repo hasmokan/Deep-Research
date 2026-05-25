@@ -8,6 +8,7 @@ import json
 from typing import Any, AsyncIterator, TypedDict
 
 from langgraph.graph import END, StateGraph
+from langgraph.types import StreamWriter
 
 from agents.react_agent import stream_react_agent_messages
 from agents.nodes.analyze import stream_analyze_node
@@ -449,10 +450,28 @@ async def _collect_streaming_node_events(stream: Any) -> dict[str, Any]:
     return final_state
 
 
-async def _streaming_answer_react_node(state: dict[str, Any]) -> dict[str, Any]:
+async def _streaming_answer_react_node(
+    state: dict[str, Any],
+    *,
+    writer: StreamWriter = lambda _: None,
+) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     working_state = dict(state)
     token_usage = TokenUsageAccumulator()
+
+    def publish_event(event: dict[str, Any]) -> None:
+        events.append(event)
+        writer({"node": "answer_react", "event": event})
+
+    publish_event(
+        {
+            "type": "trace",
+            "stage": "react",
+            "kind": "reasoning",
+            "title": "Select next action",
+            "detail": "Asking the model to choose whether to answer, load a skill, or call a tool.",
+        }
+    )
 
     tracer = get_langfuse_tracer()
     with tracer.start(
@@ -483,13 +502,13 @@ async def _streaming_answer_react_node(state: dict[str, Any]) -> dict[str, Any]:
                         "id": message.get("id") or "react-agent-llm",
                         "usage": usage,
                     }
-                    events.append(react_event)
-                    events.append({"type": "agent_message", "message": message})
+                    publish_event(react_event)
+                    publish_event({"type": "agent_message", "message": message})
                 else:
-                    events.append(react_event)
+                    publish_event(react_event)
                 _merge_react_documents(working_state, message)
             elif event_type == "clarification":
-                events.append(react_event)
+                publish_event(react_event)
                 question = str(react_event.get("question") or react_event.get("message") or "").strip()
                 working_state.update(
                     {
@@ -500,7 +519,7 @@ async def _streaming_answer_react_node(state: dict[str, Any]) -> dict[str, Any]:
                 )
                 break
             elif event_type == "final":
-                events.append(react_event)
+                publish_event(react_event)
                 working_state.update(
                     {
                         "answer": str(react_event.get("answer") or "").strip(),
@@ -509,7 +528,7 @@ async def _streaming_answer_react_node(state: dict[str, Any]) -> dict[str, Any]:
                     }
                 )
             else:
-                events.append(react_event)
+                publish_event(react_event)
         react_observation.update(
             output={
                 "answer_preview": _text_preview(working_state.get("answer")),
@@ -621,7 +640,20 @@ async def _stream_langgraph_research_events(
             )
             await asyncio.sleep(0)
 
-            async for update in _get_streaming_research_graph().astream(state, stream_mode="updates"):
+            async for stream_chunk in _get_streaming_research_graph().astream(
+                state,
+                stream_mode=["updates", "custom"],
+            ):
+                stream_mode, update = _normalize_graph_stream_chunk(stream_chunk)
+                if stream_mode == "custom":
+                    async for event in _sse_events_for_custom_graph_stream(
+                        update,
+                        state,
+                        record_event=record_event,
+                    ):
+                        yield event
+                    continue
+
                 if not isinstance(update, dict):
                     continue
 
@@ -673,6 +705,33 @@ def _merge_graph_update(state: dict[str, Any], node_update: dict[str, Any]) -> N
 
     if node_usage:
         state["token_usage"] = add_token_usage(previous_usage, node_usage)
+
+
+def _normalize_graph_stream_chunk(chunk: Any) -> tuple[str, Any]:
+    if isinstance(chunk, tuple) and len(chunk) == 2:
+        mode, payload = chunk
+        if isinstance(mode, str):
+            return mode, payload
+    return "updates", chunk
+
+
+async def _sse_events_for_custom_graph_stream(
+    payload: Any,
+    state: dict[str, Any],
+    *,
+    record_event: Any,
+) -> AsyncIterator[str]:
+    if not isinstance(payload, dict):
+        return
+    if payload.get("node") != "answer_react":
+        return
+
+    react_event = payload.get("event")
+    if not isinstance(react_event, dict):
+        return
+
+    async for event in _emit_react_runtime_event(react_event, state, record_event):
+        yield event
 
 
 async def _sse_events_for_graph_update(
@@ -1023,32 +1082,112 @@ async def _emit_react_stream_events(
     state: dict[str, Any],
     record_event: Any,
 ) -> AsyncIterator[str]:
-    emitted_answer = False
-    token_usage_base = normalize_token_usage(state.get("_token_usage_before_update"))
     for react_event in state.get("stream_events", []):
         if not isinstance(react_event, dict):
             continue
 
-        event_type = react_event.get("type")
-        if event_type == "token_usage":
-            token_usage = add_token_usage(token_usage_base, normalize_token_usage(react_event.get("usage")))
+        async for event in _emit_react_runtime_event(react_event, state, record_event):
+            yield event
+
+
+async def _emit_react_runtime_event(
+    react_event: dict[str, Any],
+    state: dict[str, Any],
+    record_event: Any,
+) -> AsyncIterator[str]:
+    if not _mark_react_stream_event(state, react_event):
+        if react_event.get("type") == "token_usage":
             state["_token_usage_streamed_for_update"] = True
-            yield record_event("token_usage", token_usage)
+        return
+
+    event_type = react_event.get("type")
+    if event_type == "token_usage":
+        token_usage_base = normalize_token_usage(state.get("_token_usage_before_update"))
+        token_usage = add_token_usage(token_usage_base, normalize_token_usage(react_event.get("usage")))
+        state["_token_usage_streamed_for_update"] = True
+        yield record_event("token_usage", token_usage)
+        await asyncio.sleep(0)
+        return
+
+    if event_type == "agent_message":
+        message = react_event.get("message") if isinstance(react_event.get("message"), dict) else {}
+        _merge_react_documents(state, message)
+        yield record_event("agent_message", message)
+        for trace_event in _trace_events_from_agent_message(message):
+            yield record_event("trace", trace_event)
+        await asyncio.sleep(0)
+        return
+
+    if event_type == "trace":
+        yield record_event(
+            "trace",
+            _trace_event(
+                react_event.get("stage") or "react",
+                react_event.get("kind") or "reasoning",
+                react_event.get("title") or "Agent event",
+                react_event.get("detail") or "",
+                **{
+                    key: value
+                    for key, value in react_event.items()
+                    if key
+                    not in {
+                        "type",
+                        "stage",
+                        "kind",
+                        "title",
+                        "detail",
+                    }
+                },
+            ),
+        )
+        await asyncio.sleep(0)
+        return
+
+    if event_type == "clarification":
+        question = str(react_event.get("question") or react_event.get("message") or "").strip()
+        if question and not state.get("_react_answer_emitted"):
+            state.update(
+                {
+                    "answer": question,
+                    "result_type": "answer",
+                    "report_completed": True,
+                }
+            )
+            yield record_event("answer", {"answer": question})
+            state["_react_answer_emitted"] = True
             await asyncio.sleep(0)
-        elif event_type == "agent_message":
-            message = react_event.get("message") if isinstance(react_event.get("message"), dict) else {}
-            yield record_event("agent_message", message)
-            for trace_event in _trace_events_from_agent_message(message):
-                yield record_event("trace", trace_event)
-            await asyncio.sleep(0)
-        elif event_type == "clarification":
-            if state.get("answer") is not None:
-                yield record_event("answer", {"answer": state.get("answer")})
-                emitted_answer = True
+        return
+
+    if event_type == "final":
+        answer = str(react_event.get("answer") or "").strip()
+        if answer:
+            state.update(
+                {
+                    "answer": answer,
+                    "result_type": "answer",
+                    "report_completed": True,
+                }
+            )
+            if not state.get("_react_answer_emitted"):
+                yield record_event("answer", {"answer": answer})
+                state["_react_answer_emitted"] = True
                 await asyncio.sleep(0)
 
-    if emitted_answer:
-        state["_react_answer_emitted"] = True
+
+def _mark_react_stream_event(state: dict[str, Any], event: dict[str, Any]) -> bool:
+    key = _react_stream_event_key(event)
+    streamed_keys = state.setdefault("_react_streamed_event_keys", set())
+    if key in streamed_keys:
+        return False
+    streamed_keys.add(key)
+    return True
+
+
+def _react_stream_event_key(event: dict[str, Any]) -> str:
+    try:
+        return json.dumps(event, sort_keys=True, ensure_ascii=False, default=str)
+    except TypeError:
+        return str(event)
 
 
 async def _complete_stream_from_state(
@@ -1243,6 +1382,8 @@ def _trace_event_from_agent_tool_message(message: dict[str, Any]) -> dict[str, A
 
 
 def _stage_for_agent_tool(tool_name: str) -> str:
+    if tool_name == "load_skill":
+        return "react"
     if tool_name == "web_search":
         return "search"
     if tool_name == "ask_clarification":
@@ -1254,6 +1395,7 @@ def _stage_for_agent_tool(tool_name: str) -> str:
 
 def _title_for_agent_tool_call(tool_name: str) -> str:
     labels = {
+        "load_skill": "Load skill",
         "web_search": "Search web",
         "ask_clarification": "Need your help",
         "read_file": "Read file",
@@ -1266,6 +1408,8 @@ def _title_for_agent_tool_call(tool_name: str) -> str:
 
 
 def _title_for_agent_tool_result(tool_name: str) -> str:
+    if tool_name == "load_skill":
+        return "Skill loaded"
     if tool_name == "web_search":
         return "Sources found"
     if tool_name == "ask_clarification":
@@ -1274,6 +1418,8 @@ def _title_for_agent_tool_result(tool_name: str) -> str:
 
 
 def _detail_for_agent_tool_call(tool_name: str, tool_args: dict[str, Any]) -> str:
+    if tool_name == "load_skill":
+        return str(tool_args.get("name") or tool_args.get("skill_name") or "").strip()
     if tool_name == "web_search" and isinstance(tool_args.get("query"), str):
         return tool_args["query"]
     if tool_name == "ask_clarification" and isinstance(tool_args.get("question"), str):

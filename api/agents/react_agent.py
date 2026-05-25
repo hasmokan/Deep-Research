@@ -60,17 +60,25 @@ async def stream_react_agent_messages(
     max_rounds: int = 4,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a minimal ReAct exchange as serializable message events."""
-    active_skills = load_enabled_skills() if skills is None else list(skills)
-    runnable_model = model or _build_model(active_skills)
+    available_skills = load_enabled_skills() if skills is None else list(skills)
+    loaded_skills: list[AgentSkill] = []
+    loaded_skill_names: set[str] = set()
+    runnable_model = model or _build_model(available_skills)
     runner = tool_runner or _run_builtin_tool
     messages: list[Any] = [
-        SystemMessage(content=build_react_system_prompt(active_skills)),
+        SystemMessage(content=build_react_system_prompt(loaded_skills, available_skills=available_skills)),
         HumanMessage(content=query),
     ]
     previous_tool_call_signature: tuple[tuple[str, str], ...] | None = None
     repeated_tool_call_count = 0
 
     for _round in range(max_rounds):
+        messages[0] = SystemMessage(
+            content=build_react_system_prompt(
+                loaded_skills,
+                available_skills=_unloaded_skills(available_skills, loaded_skill_names),
+            )
+        )
         response = await runnable_model.ainvoke(
             messages,
             _langchain_config("react-agent-llm", "react"),
@@ -90,6 +98,17 @@ async def stream_react_agent_messages(
             tool_name = str(tool_call.get("name") or "")
             tool_args = tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {}
             tool_call_id = str(tool_call.get("id") or tool_name)
+
+            if tool_name == "load_skill":
+                skill = _find_skill(available_skills, tool_args)
+                already_loaded = bool(skill and skill.name in loaded_skill_names)
+                if skill and not already_loaded:
+                    loaded_skills.append(skill)
+                    loaded_skill_names.add(skill.name)
+                content = _load_skill_tool_content(tool_args, skill, already_loaded=already_loaded)
+                messages.append(ToolMessage(content=content, tool_call_id=tool_call_id, name=tool_name))
+                yield _skill_loaded_trace_event(tool_args, skill, already_loaded=already_loaded)
+                continue
 
             if tool_name == "ask_clarification":
                 content = _format_clarification(tool_args)
@@ -147,11 +166,99 @@ async def stream_react_agent_messages(
     yield {"type": "final", "answer": _partial_answer_fallback(messages)}
 
 
-def build_react_system_prompt(skills: list[AgentSkill] | None = None) -> str:
+def build_react_system_prompt(
+    skills: list[AgentSkill] | None = None,
+    *,
+    available_skills: list[AgentSkill] | None = None,
+) -> str:
+    blocks = [REACT_SYSTEM_PROMPT.rstrip()]
+    catalog_prompt = _format_skill_catalog_for_prompt(available_skills or [])
+    if catalog_prompt:
+        blocks.append(catalog_prompt)
     skill_prompt = format_skills_for_prompt(skills or [])
-    if not skill_prompt:
-        return REACT_SYSTEM_PROMPT
-    return f"{REACT_SYSTEM_PROMPT.rstrip()}\n\n{skill_prompt}\n"
+    if skill_prompt:
+        blocks.append(skill_prompt)
+    return "\n\n".join(blocks) + "\n"
+
+
+def _format_skill_catalog_for_prompt(skills: list[AgentSkill]) -> str:
+    if not skills:
+        return ""
+
+    lines = [
+        "Available skills are listed below. Do not assume they are already active.",
+        "When a skill materially applies, call load_skill with the exact name before using its workflow.",
+        "Load only the skills needed for the current request.",
+    ]
+    for skill in skills:
+        description = skill.description.strip() or "No description."
+        lines.append(f"- {skill.name}: {description}")
+    return "\n".join(lines)
+
+
+def _unloaded_skills(skills: list[AgentSkill], loaded_skill_names: set[str]) -> list[AgentSkill]:
+    return [skill for skill in skills if skill.name not in loaded_skill_names]
+
+
+def _find_skill(skills: list[AgentSkill], args: dict[str, Any]) -> AgentSkill | None:
+    requested_name = str(args.get("name") or args.get("skill_name") or "").strip()
+    if not requested_name:
+        return None
+    for skill in skills:
+        if skill.name == requested_name:
+            return skill
+    return None
+
+
+def _load_skill_tool_content(
+    args: dict[str, Any],
+    skill: AgentSkill | None,
+    *,
+    already_loaded: bool,
+) -> str:
+    requested_name = str(args.get("name") or args.get("skill_name") or "").strip() or "(missing)"
+    if skill is None:
+        return f"Skill not found: {requested_name}. Use one of the available skill names exactly."
+    if already_loaded:
+        return f"Skill already loaded: {skill.name}."
+    return f"Loaded skill: {skill.name}."
+
+
+def _skill_loaded_trace_event(
+    args: dict[str, Any],
+    skill: AgentSkill | None,
+    *,
+    already_loaded: bool,
+) -> dict[str, Any]:
+    requested_name = str(args.get("name") or args.get("skill_name") or "").strip() or "(missing)"
+    if skill is None:
+        return {
+            "type": "trace",
+            "stage": "react",
+            "kind": "skill",
+            "title": "Skill not found",
+            "detail": f"Skill not found: {requested_name}",
+            "skills": [],
+        }
+
+    return {
+        "type": "trace",
+        "stage": "react",
+        "kind": "skill",
+        "title": "Skill already loaded" if already_loaded else "Skill loaded",
+        "detail": f"Skill already loaded: {skill.name}" if already_loaded else f"Loaded skill: {skill.name}",
+        "skills": [_skill_trace_item(skill)],
+    }
+
+
+def _skill_trace_item(skill: AgentSkill) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "name": skill.name,
+        "description": skill.description,
+    }
+    if skill.path:
+        item["path"] = str(skill.path)
+    return item
 
 
 def _build_model(skills: list[AgentSkill] | None = None) -> Any:
@@ -204,8 +311,22 @@ def ask_clarification_tool(question: str, options: list[str] | None = None) -> s
     return _format_clarification({"question": question, "options": options or []})
 
 
+@tool("load_skill", parse_docstring=True)
+def load_skill_tool(name: str) -> str:
+    """Load one available skill by exact name before applying its workflow.
+
+    Args:
+        name: Exact skill name from the available skill catalog.
+    """
+    return f"Requesting skill load: {name}"
+
+
 def available_react_tools_for_skills(skills: list[AgentSkill] | None = None) -> list[Any]:
-    return filter_tools_by_skill_allowed_tools([web_search_tool, ask_clarification_tool], skills or [])
+    available_skills = skills or []
+    base_tools = filter_tools_by_skill_allowed_tools([web_search_tool, ask_clarification_tool], available_skills)
+    if not available_skills:
+        return base_tools
+    return [load_skill_tool, *base_tools]
 
 
 async def _run_builtin_tool(name: str, args: dict[str, Any]) -> Any:

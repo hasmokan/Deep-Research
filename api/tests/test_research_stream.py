@@ -180,11 +180,74 @@ class ResearchStreamTests(TestCase):
             events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
 
         self.assertTrue(fake_graph.called)
-        self.assertEqual(fake_graph.stream_mode, "updates")
+        self.assertEqual(fake_graph.stream_mode, ["updates", "custom"])
         complete_payload = json.loads(
             [event for event in events if event.startswith("event: complete")][0].split("data: ", 1)[1]
         )
         self.assertEqual(complete_payload["answer"], "LangGraph handled this.")
+
+    def test_stream_forwards_react_custom_events_before_node_update(self):
+        from agents import research_stream
+
+        custom_react_event = {
+            "type": "trace",
+            "stage": "react",
+            "kind": "reasoning",
+            "title": "Select next action",
+            "detail": "Asking the model to choose whether to answer or call a tool.",
+        }
+
+        class FakeGraph:
+            async def astream(self, state, stream_mode=None):
+                yield (
+                    "updates",
+                    {
+                        "classify_intent": {
+                            "intent": "direct_answer",
+                            "route": "answer_direct",
+                            "graph_route": "answer_react",
+                            "reason": "React mode was requested.",
+                        }
+                    },
+                )
+                yield ("custom", {"node": "answer_react", "event": custom_react_event})
+                yield (
+                    "updates",
+                    {
+                        "answer_react": {
+                            "answer": "React handled this.",
+                            "result_type": "answer",
+                            "report_completed": True,
+                            "stream_events": [custom_react_event],
+                        }
+                    },
+                )
+
+        with patch.object(research_stream, "_streaming_research_graph_override", FakeGraph()):
+            events = asyncio.run(
+                _collect_stream_events(
+                    research_stream.stream_research_events(
+                        "test query",
+                        execution_mode="react",
+                    )
+                )
+            )
+
+        trace_payloads = [
+            json.loads(event.split("data: ", 1)[1])
+            for event in events
+            if event.startswith("event: trace")
+        ]
+        answer_index = next(index for index, event in enumerate(events) if event.startswith("event: answer"))
+        custom_trace_indexes = [
+            index
+            for index, event in enumerate(events)
+            if event.startswith("event: trace") and '"title":"Select next action"' in event
+        ]
+
+        self.assertEqual([payload["title"] for payload in trace_payloads].count("Select next action"), 1)
+        self.assertTrue(custom_trace_indexes)
+        self.assertLess(custom_trace_indexes[0], answer_index)
 
     def test_stream_resolves_follow_up_before_routing_and_search(self):
         from agents import research_stream
@@ -403,6 +466,20 @@ class ResearchStreamTests(TestCase):
 
         async def fake_react_messages(query):
             yield {
+                "type": "trace",
+                "stage": "react",
+                "kind": "skill",
+                "title": "Skills loaded",
+                "detail": "Loaded 1 enabled skill: image-generation",
+                "skills": [
+                    {
+                        "name": "image-generation",
+                        "description": "Generate images from structured prompts.",
+                        "path": "/mnt/skills/public/image-generation/SKILL.md",
+                    }
+                ],
+            }
+            yield {
                 "type": "agent_message",
                 "message": {
                     "type": "ai",
@@ -463,17 +540,22 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(trace_payloads[0]["route"], "web_search")
         self.assertEqual(trace_payloads[1]["stage"], "react")
         self.assertEqual(trace_payloads[1]["title"], "Run ReAct agent")
+        self.assertEqual(trace_payloads[2]["stage"], "react")
+        self.assertEqual(trace_payloads[2]["title"], "Select next action")
+        self.assertEqual(trace_payloads[3]["kind"], "skill")
+        self.assertEqual(trace_payloads[3]["title"], "Skills loaded")
+        self.assertEqual(trace_payloads[3]["skills"][0]["name"], "image-generation")
         self.assertEqual(
-            [(payload["kind"], payload["title"]) for payload in trace_payloads[2:]],
+            [(payload["kind"], payload["title"]) for payload in trace_payloads[4:]],
             [
                 ("reasoning", "Thinking"),
                 ("tool_call", "Search web"),
                 ("tool_result", "Sources found"),
             ],
         )
-        self.assertEqual(trace_payloads[2]["detail"], "Need a current source.")
-        self.assertEqual(trace_payloads[3]["detail"], "test query")
-        self.assertEqual(trace_payloads[4]["documents"][0]["title"], "Example Source")
+        self.assertEqual(trace_payloads[4]["detail"], "Need a current source.")
+        self.assertEqual(trace_payloads[5]["detail"], "test query")
+        self.assertEqual(trace_payloads[6]["documents"][0]["title"], "Example Source")
 
         complete_payload = json.loads(
             [event for event in events if event.startswith("event: complete")][0].split("data: ", 1)[1]
@@ -481,6 +563,42 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(complete_payload["answer"], "Here is the sourced answer.")
         self.assertEqual(complete_payload["result_type"], "answer")
         self.assertEqual(complete_payload["status"], "completed")
+
+    def test_sandbox_trace_details_include_action_parameters(self):
+        from agents.nodes.conversation_router import (
+            _sandbox_tool_call_detail,
+            _sandbox_tool_result_detail,
+        )
+
+        self.assertEqual(
+            _sandbox_tool_call_detail(
+                "bash",
+                {"command": "python /mnt/user-data/workspace/demo.py"},
+            ),
+            "python /mnt/user-data/workspace/demo.py",
+        )
+        self.assertEqual(
+            _sandbox_tool_call_detail(
+                "read_file",
+                {"path": "/mnt/skills/public/image-generation/SKILL.md"},
+            ),
+            "Read /mnt/skills/public/image-generation/SKILL.md",
+        )
+        self.assertEqual(
+            _sandbox_tool_call_detail(
+                "write_file",
+                {"path": "/mnt/user-data/workspace/prompt.json"},
+            ),
+            "Write /mnt/user-data/workspace/prompt.json",
+        )
+        self.assertEqual(
+            _sandbox_tool_result_detail(
+                "write_file",
+                {"ok": True, "content": ""},
+                {"path": "/mnt/user-data/workspace/prompt.json"},
+            ),
+            "Wrote /mnt/user-data/workspace/prompt.json",
+        )
 
     def test_stream_emits_token_usage_events_and_complete_payload(self):
         from agents import research_stream

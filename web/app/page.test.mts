@@ -9,6 +9,7 @@ const workspaceViewSource = await readFile(new URL('../components/research/resea
 const conversationMessagesSource = await readFile(new URL('../components/research/conversation-messages.tsx', import.meta.url), 'utf8');
 const errorStateSource = await readFile(new URL('../components/research/error-state.tsx', import.meta.url), 'utf8');
 const globalsSource = await readFile(new URL('./globals.css', import.meta.url), 'utf8');
+const loadingStateSource = await readFile(new URL('../components/research/loading-state.tsx', import.meta.url), 'utf8');
 
 test('home page reports client-side errors to diagnostics', () => {
   assert.match(pageSource, /useResearchWorkspaceController/);
@@ -48,4 +49,10 @@ test('agent trace exposes a live token usage meter with breakdown', () => {
   assert.match(conversationMessagesSource, /estimated/);
   assert.match(globalsSource, /token-usage-roll-in/);
   assert.match(globalsSource, /translateY\(-85%\)/);
+});
+
+test('agent trace has a distinct skill loading treatment', () => {
+  assert.match(loadingStateSource, /BookOpen/);
+  assert.match(loadingStateSource, /event\.kind === 'skill'/);
+  assert.match(loadingStateSource, /skill/);
 });

@@ -142,6 +142,39 @@ test('buildResearchActivity keeps backend trace and model thinking events', () =
   assert.match(activity[2].detail, /compare source reliability/);
 });
 
+test('buildResearchActivity keeps skill loading trace events visible', () => {
+  const activity = buildResearchActivity(
+    [],
+    [],
+    [],
+    [
+      {
+        id: 'react-skill-image-generation',
+        stage: 'react',
+        kind: 'skill',
+        title: 'Skills loaded',
+        detail: 'Loaded 1 enabled skill: image-generation',
+      },
+      {
+        id: 'read-skill-file',
+        stage: 'coding',
+        kind: 'tool_call',
+        title: 'Read file',
+        detail: 'Read /mnt/skills/public/image-generation/SKILL.md',
+        tool: 'read_file',
+      },
+    ],
+  );
+
+  assert.deepEqual(
+    activity.map((event) => [event.kind, event.title, event.detail]),
+    [
+      ['skill', 'Skills loaded', 'Loaded 1 enabled skill: image-generation'],
+      ['tool_call', 'Read file', 'Read /mnt/skills/public/image-generation/SKILL.md'],
+    ],
+  );
+});
+
 test('buildResearchActivityFromAgentMessages turns ReAct messages into trace steps', () => {
   const activity = buildResearchActivityFromAgentMessages([
     {

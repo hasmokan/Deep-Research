@@ -311,6 +311,7 @@ export function buildResearchActivity(
       kind: event.kind,
       title: event.title,
       detail: getTraceDetail(event),
+      tool: event.tool,
       documents: event.documents,
     }));
 
