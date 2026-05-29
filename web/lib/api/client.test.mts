@@ -283,8 +283,9 @@ test('streamResearchRun reconnects to a persisted run event stream', async () =>
 
     const body = new ReadableStream({
       start(controller) {
-        controller.enqueue(encoder.encode('event: status\ndata: {"stage":"search","label":"Searching","message":"Searching web."}\n\n'));
-        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode('event: custom\ndata: {"type":"status","data":{"stage":"search","label":"Searching","message":"Searching web."}}\n\n'));
+        controller.enqueue(encoder.encode(`event: values\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode('event: end\ndata: null\n\n'));
         controller.close();
       },
     });
@@ -351,9 +352,10 @@ test('streamResearch forwards ReAct agent messages', async () => {
   globalThis.fetch = async () => {
     const body = new ReadableStream({
       start(controller) {
-        controller.enqueue(encoder.encode(`event: agent_message\ndata: ${JSON.stringify(aiMessage)}\n\n`));
-        controller.enqueue(encoder.encode(`event: agent_message\ndata: ${JSON.stringify(toolMessage)}\n\n`));
-        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode(`event: messages\ndata: ${JSON.stringify(aiMessage)}\n\n`));
+        controller.enqueue(encoder.encode(`event: messages\ndata: ${JSON.stringify(toolMessage)}\n\n`));
+        controller.enqueue(encoder.encode(`event: values\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode('event: end\ndata: null\n\n'));
         controller.close();
       },
     });
@@ -395,9 +397,10 @@ test('streamResearch forwards answer deltas while preserving final result', asyn
   globalThis.fetch = async () => {
     const body = new ReadableStream({
       start(controller) {
-        controller.enqueue(encoder.encode('event: answer_delta\ndata: {"delta":"```python\\n"}\n\n'));
-        controller.enqueue(encoder.encode('event: answer_delta\ndata: {"delta":"print(\\"ok\\")\\n```"}\n\n'));
-        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode('event: custom\ndata: {"type":"answer_delta","data":{"delta":"```python\\n"}}\n\n'));
+        controller.enqueue(encoder.encode('event: custom\ndata: {"type":"answer_delta","data":{"delta":"print(\\"ok\\")\\n```"}}\n\n'));
+        controller.enqueue(encoder.encode(`event: values\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode('event: end\ndata: null\n\n'));
         controller.close();
       },
     });
@@ -445,8 +448,9 @@ test('streamResearch forwards token usage updates and returns final usage', asyn
   globalThis.fetch = async () => {
     const body = new ReadableStream({
       start(controller) {
-        controller.enqueue(encoder.encode(`event: token_usage\ndata: ${JSON.stringify(tokenUsage)}\n\n`));
-        controller.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode(`event: custom\ndata: ${JSON.stringify({ type: 'token_usage', data: tokenUsage })}\n\n`));
+        controller.enqueue(encoder.encode(`event: values\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode('event: end\ndata: null\n\n'));
         controller.close();
       },
     });
@@ -464,6 +468,72 @@ test('streamResearch forwards token usage updates and returns final usage', asyn
       { onTokenUsage: (usage) => tokenUsageUpdates.push(usage) },
     );
 
+    assert.deepEqual(tokenUsageUpdates, [tokenUsage]);
+    assert.deepEqual(streamedResult, result);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('streamResearch consumes DeerFlow-style messages custom values and end events', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const agentMessages: AgentMessage[] = [];
+  const traces: string[] = [];
+  const tokenUsageUpdates: TokenUsage[] = [];
+  const tokenUsage: TokenUsage = {
+    input_tokens: 12,
+    output_tokens: 8,
+    total_tokens: 20,
+  };
+  const result: ResearchResult = {
+    query: '刷机有什么用',
+    documents: [],
+    analysis: null,
+    report: null,
+    answer: '刷机可以更新系统、救砖或获得更多控制权。',
+    result_type: 'answer',
+    status: 'completed',
+    token_usage: tokenUsage,
+  };
+  const aiMessage: AgentMessage = {
+    type: 'ai',
+    id: 'ai-1',
+    content: '刷机可以更新系统',
+    tool_calls: [],
+  };
+
+  globalThis.fetch = async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: messages\ndata: ${JSON.stringify(aiMessage)}\n\n`));
+        controller.enqueue(encoder.encode('event: custom\ndata: {"type":"trace","data":{"id":"react-step","stage":"react","kind":"reasoning","title":"Select next action","detail":"Choosing next step."}}\n\n'));
+        controller.enqueue(encoder.encode(`event: custom\ndata: ${JSON.stringify({ type: 'token_usage', data: tokenUsage })}\n\n`));
+        controller.enqueue(encoder.encode(`event: values\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode('event: end\ndata: null\n\n'));
+        controller.close();
+      },
+    });
+
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    const streamedResult = await client.streamResearch(
+      { query: '刷机有什么用' },
+      {
+        onAgentMessage: (message) => agentMessages.push(message),
+        onTrace: (trace) => traces.push(trace.title),
+        onTokenUsage: (usage) => tokenUsageUpdates.push(usage),
+      },
+    );
+
+    assert.deepEqual(agentMessages, [aiMessage]);
+    assert.deepEqual(traces, ['Select next action']);
     assert.deepEqual(tokenUsageUpdates, [tokenUsage]);
     assert.deepEqual(streamedResult, result);
   } finally {

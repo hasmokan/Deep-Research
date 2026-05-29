@@ -42,6 +42,11 @@ export interface ResearchActivityEvent {
   kind: 'status' | 'thinking' | 'sources' | ResearchStreamTrace['kind'];
   title: string;
   detail: string;
+  agentRunId?: string;
+  parentRunId?: string | null;
+  agentPath?: string[];
+  agentLabel?: string;
+  agentDepth?: number;
   tool?: string;
   documents?: Array<Document | ResearchStreamTraceDocument>;
 }
@@ -311,6 +316,11 @@ export function buildResearchActivity(
       kind: event.kind,
       title: event.title,
       detail: getTraceDetail(event),
+      agentRunId: event.agent_run_id,
+      parentRunId: event.parent_run_id,
+      agentPath: event.agent_path,
+      agentLabel: event.agent_label,
+      agentDepth: event.agent_depth,
       tool: event.tool,
       documents: event.documents,
     }));

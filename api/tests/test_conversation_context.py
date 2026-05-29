@@ -91,6 +91,7 @@ class ConversationResearchRouteTests(TestCase):
         async def fake_stream(
             query,
             run_id=None,
+            thread_id=None,
             display_query=None,
             store=None,
             latest_result=None,
@@ -110,7 +111,8 @@ class ConversationResearchRouteTests(TestCase):
                 "report_thinking": None,
                 "status": "completed",
             }
-            yield format_sse_event("complete", payload)
+            yield format_sse_event("values", payload)
+            yield format_sse_event("end", None)
 
         with (
             patch.object(research, "stream_research_events", fake_stream),
@@ -141,6 +143,7 @@ class ConversationResearchRouteTests(TestCase):
         async def fake_stream(
             query,
             run_id=None,
+            thread_id=None,
             display_query=None,
             store=None,
             latest_result=None,
@@ -150,10 +153,12 @@ class ConversationResearchRouteTests(TestCase):
             self.assertIn("Previous conversation context:", query)
             self.assertEqual(display_query, "展开第三点")
             self.assertIsNone(latest_result)
-            yield format_sse_event("complete", {"query": display_query, "status": "completed"})
+            yield format_sse_event("values", {"query": display_query, "status": "completed"})
+            yield format_sse_event("end", None)
 
         async def fake_persisted_stream(run_id, user_id, store=None):
-            yield format_sse_event("complete", {"query": "展开第三点", "status": "completed"})
+            yield format_sse_event("values", {"query": "展开第三点", "status": "completed"})
+            yield format_sse_event("end", None)
 
         client = TestClient(app)
 

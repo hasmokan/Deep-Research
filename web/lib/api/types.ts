@@ -166,6 +166,11 @@ export interface ResearchStreamTrace {
   kind: 'tool_call' | 'tool_result' | 'reasoning' | 'skill';
   title: string;
   detail: string;
+  agent_run_id?: string;
+  parent_run_id?: string | null;
+  agent_path?: string[];
+  agent_label?: string;
+  agent_depth?: number;
   tool?: string;
   query?: string;
   documents?: ResearchStreamTraceDocument[];

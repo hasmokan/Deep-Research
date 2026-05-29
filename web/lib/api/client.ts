@@ -21,6 +21,32 @@ import type {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+type ResearchStreamEventResult =
+  | { type: 'pending' }
+  | { type: 'values'; payload: ResearchResult }
+  | { type: 'end' }
+  | { type: 'error'; message: string };
+
+type ResearchStreamHandlerKey =
+  | 'onMetadata'
+  | 'onStatus'
+  | 'onTrace'
+  | 'onAgentMessage'
+  | 'onDocuments'
+  | 'onThinking'
+  | 'onAnalysis'
+  | 'onReport'
+  | 'onAnswerDelta'
+  | 'onAnswer'
+  | 'onTokenUsage';
+
+type HandlerPayload<T extends ResearchStreamHandlerKey> =
+  Parameters<NonNullable<ResearchStreamHandlers[T]>>[0];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 export class ApiClient {
   private baseUrl: string;
   private accessTokenProvider: (() => string | null | undefined) | null = null;
@@ -344,6 +370,7 @@ export class ApiClient {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let latestValues: ResearchResult | null = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -354,9 +381,15 @@ export class ApiClient {
 
       for (const block of blocks) {
         const result = this.handleResearchStreamEvent(block, handlers);
-        if (result.type === 'complete') {
+        if (result.type === 'values') {
+          latestValues = result.payload;
+        }
+        if (result.type === 'end') {
           reader.releaseLock();
-          return result.payload;
+          if (latestValues) {
+            return latestValues;
+          }
+          throw new Error('Research stream ended before final values');
         }
         if (result.type === 'error') {
           reader.releaseLock();
@@ -444,7 +477,7 @@ export class ApiClient {
   private handleResearchStreamEvent(
     block: string,
     handlers: ResearchStreamHandlers
-  ): { type: 'pending' } | { type: 'complete'; payload: ResearchResult } | { type: 'error'; message: string } {
+  ): ResearchStreamEventResult {
     const event = block
       .split('\n')
       .find((line) => line.startsWith('event: '))
@@ -464,33 +497,61 @@ export class ApiClient {
 
     if (event === 'metadata') {
       handlers.onMetadata?.(payload);
-    } else if (event === 'status') {
-      handlers.onStatus?.(payload);
-    } else if (event === 'trace') {
-      handlers.onTrace?.(payload);
-    } else if (event === 'agent_message') {
-      handlers.onAgentMessage?.(payload);
-    } else if (event === 'documents') {
-      handlers.onDocuments?.(payload.documents ?? []);
-    } else if (event === 'thinking') {
-      handlers.onThinking?.(payload);
-    } else if (event === 'analysis') {
-      handlers.onAnalysis?.(payload.analysis ?? null);
-    } else if (event === 'report') {
-      handlers.onReport?.(payload.report ?? null);
-    } else if (event === 'answer_delta') {
-      handlers.onAnswerDelta?.(payload.delta ?? '');
-    } else if (event === 'answer') {
-      handlers.onAnswer?.(payload.answer ?? null);
-    } else if (event === 'token_usage') {
-      handlers.onTokenUsage?.(payload);
-    } else if (event === 'complete') {
-      return { type: 'complete', payload };
-    } else if (event === 'stream_error') {
-      return { type: 'error', message: payload.detail ?? 'Research stream failed' };
+    } else if (event === 'messages' || event === 'messages-tuple') {
+      const messagePayload = Array.isArray(payload) ? payload[0] : payload;
+      handlers.onAgentMessage?.(messagePayload as HandlerPayload<'onAgentMessage'>);
+    } else if (event === 'custom') {
+      this.handleResearchCustomStreamEvent(payload, handlers);
+    } else if (event === 'values') {
+      return { type: 'values', payload };
+    } else if (event === 'end') {
+      return { type: 'end' };
+    } else if (event === 'error') {
+      return { type: 'error', message: payload.message ?? payload.detail ?? 'Research stream failed' };
     }
 
     return { type: 'pending' };
+  }
+
+  private handleResearchCustomStreamEvent(
+    payload: { type?: string; data?: unknown },
+    handlers: ResearchStreamHandlers,
+  ): void {
+    const type = payload?.type;
+    const data = payload?.data;
+    const dataRecord = isRecord(data) ? data : {};
+
+    if (type === 'status') {
+      handlers.onStatus?.(data as HandlerPayload<'onStatus'>);
+    } else if (type === 'trace') {
+      handlers.onTrace?.(data as HandlerPayload<'onTrace'>);
+    } else if (type === 'agent_message') {
+      handlers.onAgentMessage?.(data as HandlerPayload<'onAgentMessage'>);
+    } else if (type === 'documents') {
+      handlers.onDocuments?.(
+        (Array.isArray(dataRecord.documents) ? dataRecord.documents : []) as HandlerPayload<'onDocuments'>,
+      );
+    } else if (type === 'thinking') {
+      handlers.onThinking?.(data as HandlerPayload<'onThinking'>);
+    } else if (type === 'analysis') {
+      handlers.onAnalysis?.(
+        (typeof dataRecord.analysis === 'string' ? dataRecord.analysis : null) as HandlerPayload<'onAnalysis'>,
+      );
+    } else if (type === 'report') {
+      handlers.onReport?.(
+        (typeof dataRecord.report === 'string' ? dataRecord.report : null) as HandlerPayload<'onReport'>,
+      );
+    } else if (type === 'answer_delta') {
+      handlers.onAnswerDelta?.(
+        (typeof dataRecord.delta === 'string' ? dataRecord.delta : '') as HandlerPayload<'onAnswerDelta'>,
+      );
+    } else if (type === 'answer') {
+      handlers.onAnswer?.(
+        (typeof dataRecord.answer === 'string' ? dataRecord.answer : null) as HandlerPayload<'onAnswer'>,
+      );
+    } else if (type === 'token_usage') {
+      handlers.onTokenUsage?.(data as HandlerPayload<'onTokenUsage'>);
+    }
   }
 
   /**

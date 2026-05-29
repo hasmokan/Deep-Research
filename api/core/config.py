@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     research_storage_backend: str = "json"
     agent_skills_dir: Optional[str] = None
     agent_enabled_skills: str = ""
+    langgraph_checkpoint_backend: str = "memory"
+    langgraph_checkpoint_postgres_url: Optional[str] = None
+    langgraph_checkpoint_setup: bool = True
 
     # Langfuse observability
     langfuse_enabled: bool = False

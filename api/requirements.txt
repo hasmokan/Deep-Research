@@ -6,6 +6,7 @@ pydantic-settings==2.7.1
 
 # AI & LangGraph
 langgraph==0.2.65
+langgraph-checkpoint-postgres>=2.0.0,<3.0.0
 langchain==0.3.20
 langchain-openai==0.2.13
 openai==1.59.8
@@ -17,6 +18,7 @@ ddgs==9.14.4
 # Database
 supabase==2.30.0
 httpx==0.28.1
+psycopg[binary,pool]>=3.2.0,<4.0.0
 
 # Utils
 python-multipart==0.0.20

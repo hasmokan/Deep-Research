@@ -204,6 +204,7 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
   const showCursor = shouldAnimateText && detail.length < event.detail.length;
   const usesThinkingMarker = isThinkingEvent(event);
   const thinkingNotes = usesThinkingMarker ? splitThinkingNotes(detail) : [];
+  const agentDepth = Math.min(event.agentDepth ?? Math.max((event.agentPath?.length ?? 1) - 1, 0), 3);
 
   return (
     <div
@@ -211,6 +212,7 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
         relative -mx-1 flex gap-2.5 rounded-[8px] px-1 py-2
         ${shouldAnimateText ? 'agent-active-row' : ''}
       `}
+      style={{ marginLeft: agentDepth ? `${agentDepth * 10}px` : undefined }}
     >
       <div className="relative flex w-5 shrink-0 justify-center pt-0.5">
         {!isLast && (
@@ -278,6 +280,11 @@ function ActivityEventRow({ event, status, isLast, isStreaming }: ActivityEventR
               {event.kind === 'skill' && (
                 <span className="rounded-full border border-border/70 bg-muted/60 px-2 py-0.5 text-[11px] text-muted-foreground">
                   skill
+                </span>
+              )}
+              {event.agentLabel && (
+                <span className="rounded-full border border-border/70 bg-background px-2 py-0.5 text-[11px] text-muted-foreground">
+                  {event.agentLabel}
                 </span>
               )}
             </div>

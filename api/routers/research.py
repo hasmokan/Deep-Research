@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from models.schemas import DocumentResponse, ResearchMemoryResponse, ResearchPlanResponse, ResearchRequest, ResearchResponse, ResearchThreadUpdate
-from agents.research_stream import stream_research_events
+from agents.research_stream import langgraph_sse_frames, stream_research_events
 from agents.conversation_context import build_contextual_research_query
 from agents.nodes.plan import assess_research_plan_need, generate_research_plan
 from agents.nodes.query_resolution import resolve_research_query_node
@@ -197,16 +197,17 @@ async def _run_research_request_to_result(
 
     async for event_text in stream_research_events(
         contextual_query,
+        thread_id=request.thread_id,
         display_query=request.query,
         latest_result=request.latest_result,
         execution_mode=request.execution_mode,
         on_complete=capture_complete,
     ):
         for event_name, payload in _parse_sse_event_blocks(event_text):
-            if event_name == "complete":
+            if event_name in {"complete", "values"}:
                 completed_payload = payload
-            elif event_name == "stream_error":
-                raise RuntimeError(payload.get("detail") or "Research stream failed")
+            elif event_name in {"stream_error", "error"}:
+                raise RuntimeError(payload.get("detail") or payload.get("message") or "Research stream failed")
 
     if completed_payload is None:
         raise RuntimeError("Research stream ended before completion")
@@ -219,11 +220,14 @@ async def _run_research_to_store(
     *,
     run_id: str,
     user_id: str,
+    thread_id: str | None = None,
     trace_id: str | None = None,
     display_query: str | None = None,
     latest_result: dict | None = None,
     execution_mode: str = "auto",
+    store=None,
 ) -> None:
+    event_store = store or research_run_store
     token = set_request_id(trace_id) if trace_id else None
     try:
         log_event(
@@ -236,8 +240,9 @@ async def _run_research_to_store(
         async for _event in stream_research_events(
             contextual_query,
             run_id=run_id,
+            thread_id=thread_id,
             display_query=display_query,
-            store=research_run_store,
+            store=event_store,
             latest_result=latest_result,
             execution_mode=execution_mode,
             on_complete=lambda result: _remember_result(user_id, result),
@@ -245,11 +250,11 @@ async def _run_research_to_store(
             pass
         log_event("research_run_finished", run_id=run_id, user_id=user_id)
     except asyncio.CancelledError:
-        research_run_store.append_event(run_id, "stopped", {"status": "stopped", "trace_id": trace_id})
+        event_store.append_event(run_id, "stopped", {"status": "stopped", "trace_id": trace_id})
         log_event("research_run_stopped", level=logging.WARNING, run_id=run_id, user_id=user_id)
         raise
     except Exception as exc:
-        research_run_store.append_event(
+        event_store.append_event(
             run_id,
             "stream_error",
             {"detail": f"Research execution failed: {exc}", "trace_id": trace_id},
@@ -272,6 +277,7 @@ def start_research_run_background(
     *,
     run_id: str,
     user_id: str,
+    thread_id: str | None = None,
     trace_id: str | None = None,
     display_query: str | None = None,
     latest_result: dict | None = None,
@@ -283,6 +289,7 @@ def start_research_run_background(
             contextual_query,
             run_id=run_id,
             user_id=user_id,
+            thread_id=thread_id,
             trace_id=trace_id,
             display_query=display_query,
             latest_result=latest_result,
@@ -306,14 +313,16 @@ async def stream_persisted_research_run_events(
     while True:
         run = event_store.get_run(run_id, user_id=user_id)
         if run is None:
-            yield _format_sse_event("stream_error", {"detail": f"Research run {run_id} not found"})
+            for frame in langgraph_sse_frames(_format_sse_event("stream_error", {"detail": f"Research run {run_id} not found"})):
+                yield frame
             return
 
         for event in run.get("events", []):
             seq = int(event.get("seq") or 0)
             if seq < next_seq:
                 continue
-            yield _persisted_event_to_sse(event)
+            for frame in langgraph_sse_frames(_persisted_event_to_sse(event)):
+                yield frame
             next_seq = max(next_seq, seq + 1)
 
         if _is_terminal_run_status(run.get("status")):
@@ -337,6 +346,7 @@ async def stream_research(
         query,
         run_id=run["run_id"],
         user_id=user_id,
+        thread_id=run["run_id"],
         trace_id=run.get("trace_id"),
     )
 
@@ -372,6 +382,7 @@ async def stream_research_post(
         contextual_query,
         run_id=run["run_id"],
         user_id=user_id,
+        thread_id=request.thread_id or run["run_id"],
         trace_id=run.get("trace_id"),
         display_query=request.query,
         latest_result=request.latest_result,
@@ -379,7 +390,11 @@ async def stream_research_post(
     )
 
     return StreamingResponse(
-        stream_persisted_research_run_events(run["run_id"], user_id, store=research_run_store),
+        stream_persisted_research_run_events(
+            run["run_id"],
+            user_id,
+            store=research_run_store,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

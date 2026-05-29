@@ -58,6 +58,29 @@ def _fake_intent_response(intent: str):
     _FakeChain.seen_payloads = []
 
 
+def _parse_sse_event(event):
+    event_name = None
+    data_lines = []
+    for line in event.splitlines():
+        if line.startswith("event: "):
+            event_name = line[len("event: "):].strip()
+        elif line.startswith("data: "):
+            data_lines.append(line[len("data: "):])
+    return event_name, json.loads("\n".join(data_lines)) if data_lines else None
+
+
+def _payloads(events, event_name):
+    return [payload for name, payload in map(_parse_sse_event, events) if name == event_name]
+
+
+def _custom_payloads(events, stream_type):
+    return [
+        payload["data"]
+        for payload in _payloads(events, "custom")
+        if payload.get("type") == stream_type
+    ]
+
+
 async def _classify_with_fake_llm(conversation_router, state, intent: str):
     _fake_intent_response(intent)
 
@@ -142,9 +165,9 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
                 )
             ]
 
-        complete_events = [event for event in events if event.startswith("event: complete")]
-        self.assertEqual(len(complete_events), 1)
-        payload = json.loads(complete_events[0].split("data: ", 1)[1])
+        values_payloads = _payloads(events, "values")
+        self.assertEqual(len(values_payloads), 1)
+        payload = values_payloads[0]
 
         self.assertEqual(payload["result_type"], "answer")
         self.assertIn("https://example.com/report", payload["answer"])
@@ -168,9 +191,9 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
                 )
             ]
 
-        complete_events = [event for event in events if event.startswith("event: complete")]
-        self.assertEqual(len(complete_events), 1)
-        payload = json.loads(complete_events[0].split("data: ", 1)[1])
+        values_payloads = _payloads(events, "values")
+        self.assertEqual(len(values_payloads), 1)
+        payload = values_payloads[0]
 
         self.assertEqual(payload["result_type"], "answer")
         self.assertIn("https://example.com/report", payload["answer"])
@@ -200,8 +223,7 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
                 )
             ]
 
-        complete_events = [event for event in events if event.startswith("event: complete")]
-        payload = json.loads(complete_events[0].split("data: ", 1)[1])
+        payload = _payloads(events, "values")[0]
 
         self.assertEqual(payload["result_type"], "answer")
         self.assertIn("没有返回可引用的来源文档", payload["answer"])
@@ -258,12 +280,9 @@ class FollowUpRoutingNodeTests(IsolatedAsyncioTestCase):
                 )
             ]
 
-        status_events = [event for event in events if event.startswith("event: status")]
-        status_payloads = [json.loads(event.split("data: ", 1)[1]) for event in status_events]
-        delta_events = [event for event in events if event.startswith("event: answer_delta")]
-        deltas = [json.loads(event.split("data: ", 1)[1])["delta"] for event in delta_events]
-        complete_events = [event for event in events if event.startswith("event: complete")]
-        payload = json.loads(complete_events[0].split("data: ", 1)[1])
+        status_payloads = _custom_payloads(events, "status")
+        deltas = [payload["delta"] for payload in _custom_payloads(events, "answer_delta")]
+        payload = _payloads(events, "values")[0]
 
         self.assertIn({"stage": "route", "label": "Understanding", "message": "Classifying the request."}, status_payloads)
         self.assertTrue(any(status["stage"] == "coding" for status in status_payloads))
@@ -392,6 +411,7 @@ class FollowUpResearchRouteTests(TestCase):
         async def fake_stream(
             query,
             run_id=None,
+            thread_id=None,
             display_query=None,
             store=None,
             latest_result=None,
@@ -399,7 +419,7 @@ class FollowUpResearchRouteTests(TestCase):
             on_complete=None,
         ):
             self.assertEqual(latest_result["query"], LATEST_RESULT["query"])
-            yield format_sse_event("complete", {
+            yield format_sse_event("values", {
                 "query": display_query,
                 "documents": LATEST_RESULT["documents"],
                 "analysis": None,
@@ -410,6 +430,7 @@ class FollowUpResearchRouteTests(TestCase):
                 "result_type": "answer",
                 "status": "completed",
             })
+            yield format_sse_event("end", None)
 
         with (
             patch.object(research, "stream_research_events", fake_stream),

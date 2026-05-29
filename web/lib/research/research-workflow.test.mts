@@ -142,6 +142,34 @@ test('buildResearchActivity keeps backend trace and model thinking events', () =
   assert.match(activity[2].detail, /compare source reliability/);
 });
 
+test('buildResearchActivity preserves parent child agent trace context', () => {
+  const activity = buildResearchActivity(
+    [],
+    [],
+    [],
+    [
+      {
+        id: 'route-selected',
+        stage: 'route',
+        kind: 'reasoning',
+        title: 'Route selected',
+        detail: 'Intent routed to answer_direct.',
+        agent_run_id: 'run-test:agent:router',
+        parent_run_id: 'run-test:agent:research',
+        agent_path: ['research', 'router'],
+        agent_label: 'Router Agent',
+        agent_depth: 1,
+      },
+    ],
+  );
+
+  assert.equal(activity[0].agentRunId, 'run-test:agent:router');
+  assert.equal(activity[0].parentRunId, 'run-test:agent:research');
+  assert.deepEqual(activity[0].agentPath, ['research', 'router']);
+  assert.equal(activity[0].agentLabel, 'Router Agent');
+  assert.equal(activity[0].agentDepth, 1);
+});
+
 test('buildResearchActivity keeps skill loading trace events visible', () => {
   const activity = buildResearchActivity(
     [],

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import uuid
 from typing import Any, AsyncIterator, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -23,17 +24,31 @@ from agents.nodes.conversation_router import (
 from agents.nodes.generate import stream_generate_node
 from agents.nodes.query_resolution import resolve_research_query_node
 from agents.nodes.web_search import web_search_node
+from services.langgraph_checkpointer import create_langgraph_checkpointer
 from services.langfuse_observability import get_langfuse_tracer
 from services.request_tracing import current_request_id
 from agents.token_usage import TokenUsageAccumulator, add_token_usage, normalize_token_usage
 
 
 _streaming_research_graph_override: Any | None = None
+_streaming_research_checkpointer = create_langgraph_checkpointer()
+
+_ROOT_AGENT_KEY = "research"
+_AGENT_CONTEXT_BY_STAGE = {
+    "route": ("router", "Router Agent"),
+    "react": ("react-worker", "ReAct Worker"),
+    "answer": ("answer-worker", "Answer Worker"),
+    "coding": ("coding-worker", "Coding Worker"),
+    "search": ("search-worker", "Search Worker"),
+    "analyze": ("analysis-worker", "Analysis Worker"),
+    "report": ("report-writer", "Report Writer"),
+}
 
 
 class StreamingResearchState(TypedDict, total=False):
     query: str
     display_query: str
+    thread_id: str | None
     documents: list[dict[str, Any]]
     analysis: str | None
     analysis_thinking: str | None
@@ -59,10 +74,65 @@ class StreamingResearchState(TypedDict, total=False):
     token_usage: dict[str, int] | None
 
 
-def format_sse_event(event: str, data: dict[str, Any]) -> str:
+def format_sse_event(event: str, data: Any) -> str:
     """Format a JSON payload as a Server-Sent Event."""
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return f"event: {event}\ndata: {payload}\n\n"
+
+
+def langgraph_sse_frames(frame: str) -> list[str]:
+    event_name, payload = _parse_sse_frame(frame)
+    if not event_name:
+        return []
+
+    if event_name == "metadata":
+        return [frame]
+    if event_name == "agent_message":
+        return [format_sse_event("messages", payload)]
+    if event_name == "complete":
+        return [
+            format_sse_event("values", payload),
+            format_sse_event("end", None),
+        ]
+    if event_name == "stream_error":
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        return [
+            format_sse_event("error", {"message": detail or "Research stream failed", "name": "StreamError"}),
+            format_sse_event("end", None),
+        ]
+    if event_name in {
+        "status",
+        "trace",
+        "documents",
+        "thinking",
+        "analysis",
+        "report",
+        "answer_delta",
+        "answer",
+        "token_usage",
+    }:
+        return [format_sse_event("custom", {"type": event_name, "data": payload})]
+
+    return []
+
+
+def _parse_sse_frame(frame: str) -> tuple[str | None, Any]:
+    event_name: str | None = None
+    data_lines: list[str] = []
+
+    for line in frame.splitlines():
+        if line.startswith("event: "):
+            event_name = line[len("event: "):].strip()
+        elif line.startswith("data: "):
+            data_lines.append(line[len("data: "):])
+
+    if not data_lines:
+        return event_name, {}
+
+    try:
+        return event_name, json.loads("\n".join(data_lines))
+    except json.JSONDecodeError:
+        return event_name, {}
 
 
 def _trace_event(
@@ -81,6 +151,25 @@ def _trace_event(
     }
     payload.update(extra)
     return payload
+
+
+def _trace_event_with_agent_context(data: dict[str, Any], run_id: str | None) -> dict[str, Any]:
+    stage = str(data.get("stage") or "").strip()
+    agent_key, agent_label = _AGENT_CONTEXT_BY_STAGE.get(stage, ("worker", "Worker Agent"))
+    root_run_id = _root_agent_run_id(run_id)
+
+    return {
+        **data,
+        "agent_run_id": data.get("agent_run_id") or f"{run_id or 'live'}:agent:{agent_key}",
+        "parent_run_id": data.get("parent_run_id") or root_run_id,
+        "agent_path": data.get("agent_path") or [_ROOT_AGENT_KEY, agent_key],
+        "agent_label": data.get("agent_label") or agent_label,
+        "agent_depth": data.get("agent_depth") if data.get("agent_depth") is not None else 1,
+    }
+
+
+def _root_agent_run_id(run_id: str | None) -> str:
+    return f"{run_id or 'live'}:agent:{_ROOT_AGENT_KEY}"
 
 
 def _document_trace_items(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -116,6 +205,7 @@ def _title_from_content(content: str) -> str:
 async def stream_research_events(
     query: str,
     run_id: str | None = None,
+    thread_id: str | None = None,
     display_query: str | None = None,
     store: Any | None = None,
     latest_result: dict[str, Any] | None = None,
@@ -126,15 +216,16 @@ async def stream_research_events(
     visible_query = display_query or query
     tracer = get_langfuse_tracer()
     trace_id = current_request_id()
+    graph_thread_id = _graph_thread_id(thread_id, run_id)
     state: dict[str, Any] = {
         "query": query,
         "display_query": visible_query,
+        "thread_id": thread_id or graph_thread_id,
         "documents": [],
         "analysis": None,
         "analysis_thinking": None,
         "report": None,
         "report_thinking": None,
-        "latest_result": latest_result,
         "resolved_query": None,
         "search_query": None,
         "context_resolution": None,
@@ -151,8 +242,12 @@ async def stream_research_events(
         "report_completed": False,
         "token_usage": None,
     }
+    if latest_result is not None:
+        state["latest_result"] = latest_result
 
     def record_event(event: str, data: dict[str, Any]) -> str:
+        if event == "trace":
+            data = _trace_event_with_agent_context(data, run_id)
         if run_id and store:
             store.append_event(run_id, event, data)
         return format_sse_event(event, data)
@@ -169,13 +264,15 @@ async def stream_research_events(
         visible_query=visible_query,
         contextual_query=query,
         run_id=run_id,
+        thread_id=graph_thread_id,
         latest_result=latest_result,
         execution_mode=execution_mode,
         tracer=tracer,
         record_event=record_event,
         complete_event=complete_event,
     ):
-        yield event
+        for frame in langgraph_sse_frames(event):
+            yield frame
     return
 
 
@@ -231,7 +328,7 @@ def build_streaming_research_graph() -> Any:
     graph.add_edge("answer_react", END)
     graph.add_edge("generate", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=_streaming_research_checkpointer)
 
 
 def _get_streaming_research_graph() -> Any:
@@ -312,7 +409,7 @@ async def _streaming_answer_coding_node(state: dict[str, Any]) -> dict[str, Any]
                 "thinking_preview": _text_preview(result.get("report_thinking")),
             }
         )
-        return result
+        return _with_latest_result(state, result)
 
 
 async def _streaming_answer_direct_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -330,7 +427,7 @@ async def _streaming_answer_direct_node(state: dict[str, Any]) -> dict[str, Any]
                 "thinking_preview": _text_preview(result.get("report_thinking")),
             }
         )
-        return result
+        return _with_latest_result(state, result)
 
 
 async def _streaming_answer_sources_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -352,7 +449,7 @@ async def _streaming_answer_sources_node(state: dict[str, Any]) -> dict[str, Any
                 "documents": _documents_observability_items(result.get("documents", [])),
             }
         )
-        return result
+        return _with_latest_result(state, result)
 
 
 async def _streaming_answer_from_artifact_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -374,7 +471,7 @@ async def _streaming_answer_from_artifact_node(state: dict[str, Any]) -> dict[st
                 "thinking_preview": _text_preview(result.get("report_thinking")),
             }
         )
-        return result
+        return _with_latest_result(state, result)
 
 
 async def _streaming_analyze_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -419,7 +516,7 @@ async def _streaming_generate_node(state: dict[str, Any]) -> dict[str, Any]:
                 "thinking_preview": _text_preview(result.get("report_thinking")),
             }
         )
-        return result
+        return _with_latest_result(state, result)
 
 
 async def _collect_streaming_node_events(stream: Any) -> dict[str, Any]:
@@ -545,7 +642,7 @@ async def _streaming_answer_react_node(
     }
     if token_usage.usage:
         result["token_usage"] = token_usage.usage
-    return result
+    return _with_latest_result(state, result)
 
 
 async def _streaming_web_search_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -573,13 +670,14 @@ async def _streaming_web_search_node(state: dict[str, Any]) -> dict[str, Any]:
     if documents:
         return result
 
-    return {
+    no_documents_result = {
         **result,
         "analysis": "No relevant documents found for the given query.",
         "report": f"# Research Report: {state.get('display_query') or state.get('query')}\n\nNo relevant documents found.",
         "analysis_completed": True,
         "report_completed": True,
     }
+    return _with_latest_result(state, no_documents_result)
 
 
 async def _stream_langgraph_research_events(
@@ -588,6 +686,7 @@ async def _stream_langgraph_research_events(
     visible_query: str,
     contextual_query: str,
     run_id: str | None,
+    thread_id: str,
     latest_result: dict[str, Any] | None,
     execution_mode: str,
     tracer: Any,
@@ -639,9 +738,17 @@ async def _stream_langgraph_research_events(
                 },
             )
             await asyncio.sleep(0)
+            graph_config = _graph_runtime_config(
+                thread_id=thread_id,
+                run_id=run_id,
+                trace_id=trace_id,
+                visible_query=visible_query,
+            )
 
-            async for stream_chunk in _get_streaming_research_graph().astream(
+            async for stream_chunk in _astream_graph(
+                _get_streaming_research_graph(),
                 state,
+                config=graph_config,
                 stream_mode=["updates", "custom"],
             ):
                 stream_mode, update = _normalize_graph_stream_chunk(stream_chunk)
@@ -692,6 +799,62 @@ async def _stream_langgraph_research_events(
             yield record_event("stream_error", {"detail": f"Research execution failed: {exc}"})
         finally:
             tracer.flush()
+
+
+def _graph_thread_id(thread_id: str | None, run_id: str | None) -> str:
+    return thread_id or run_id or f"ephemeral-{uuid.uuid4().hex}"
+
+
+def _graph_runtime_config(
+    *,
+    thread_id: str,
+    run_id: str | None,
+    trace_id: str | None,
+    visible_query: str,
+) -> dict[str, Any]:
+    metadata = {
+        "thread_id": thread_id,
+        "display_query": visible_query,
+    }
+    if run_id:
+        metadata["run_id"] = run_id
+    if trace_id:
+        metadata["trace_id"] = trace_id
+
+    return {
+        "configurable": {"thread_id": thread_id},
+        "metadata": metadata,
+    }
+
+
+async def _astream_graph(
+    graph: Any,
+    state: dict[str, Any],
+    *,
+    config: dict[str, Any],
+    stream_mode: list[str],
+) -> AsyncIterator[Any]:
+    signature = inspect.signature(graph.astream)
+    accepts_config = "config" in signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+
+    if accepts_config:
+        async for stream_chunk in graph.astream(state, config=config, stream_mode=stream_mode):
+            yield stream_chunk
+        return
+
+    async for stream_chunk in graph.astream(state, stream_mode=stream_mode):
+        yield stream_chunk
+
+
+def _with_latest_result(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    next_state = {**state, **result}
+    return {
+        **result,
+        "latest_result": _result_payload(next_state),
+    }
 
 
 def _merge_graph_update(state: dict[str, Any], node_update: dict[str, Any]) -> None:

@@ -124,6 +124,16 @@ SUPABASE_SERVICE_KEY=
 RESEARCH_STORAGE_BACKEND=supabase
 ```
 
+如果要把 LangGraph 线程 checkpoint 持久化到 Supabase Postgres，再配置：
+
+```env
+LANGGRAPH_CHECKPOINT_BACKEND=postgres
+LANGGRAPH_CHECKPOINT_POSTGRES_URL=postgresql://.../postgres?sslmode=require
+LANGGRAPH_CHECKPOINT_SETUP=true
+```
+
+这里需要 Supabase 的 Postgres 直连或 Session Pooler 连接串，不是 `SUPABASE_URL` REST API。不要优先使用 Transaction Pooler，除非确认底层驱动已关闭 prepared statements。
+
 启动后端：
 
 ```bash

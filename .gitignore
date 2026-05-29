@@ -40,6 +40,7 @@ yarn-error.log*
 # Local research run event storage
 api/data/
 api/skills/.skill-state.json
+docs/interview/deep-research-agent-interview-prep.md
 
 # Testing
 coverage/

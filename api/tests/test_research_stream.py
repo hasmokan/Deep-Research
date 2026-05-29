@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import uuid
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -108,11 +109,7 @@ class ResearchStreamTests(TestCase):
         ):
             events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
 
-        trace_payloads = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: trace")
-        ]
+        trace_payloads = _custom_payloads(events, "trace")
 
         self.assertEqual(trace_payloads[0]["kind"], "reasoning")
         self.assertEqual(trace_payloads[0]["title"], "Route selected")
@@ -123,16 +120,8 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(trace_payloads[2]["kind"], "tool_result")
         self.assertEqual(trace_payloads[2]["documents"][0]["title"], "Example Source")
         self.assertEqual(trace_payloads[2]["documents"][0]["url"], "https://example.com/source")
-        thinking_payloads = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: thinking")
-        ]
-        agent_messages = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: agent_message")
-        ]
+        thinking_payloads = _custom_payloads(events, "thinking")
+        agent_messages = _payloads(events, "messages")
         self.assertEqual(thinking_payloads[0]["id"], "analysis-thinking")
         self.assertEqual(thinking_payloads[0]["text"], "Reading the source.")
         self.assertEqual(thinking_payloads[1]["id"], "report-thinking")
@@ -181,10 +170,130 @@ class ResearchStreamTests(TestCase):
 
         self.assertTrue(fake_graph.called)
         self.assertEqual(fake_graph.stream_mode, ["updates", "custom"])
-        complete_payload = json.loads(
-            [event for event in events if event.startswith("event: complete")][0].split("data: ", 1)[1]
+        values_payload = _payloads(events, "values")[0]
+        self.assertEqual(values_payload["answer"], "LangGraph handled this.")
+
+    def test_stream_passes_thread_id_to_langgraph_config(self):
+        from agents import research_stream
+
+        class FakeGraph:
+            config = None
+            state = None
+
+            async def astream(self, state, config=None, stream_mode=None):
+                self.state = dict(state)
+                self.config = config
+                yield {
+                    "classify_intent": {
+                        "intent": "direct_answer",
+                        "reason": "test route",
+                    }
+                }
+                yield {
+                    "answer_direct": {
+                        "answer": "Thread-aware graph handled this.",
+                        "result_type": "answer",
+                        "report_completed": True,
+                    }
+                }
+
+        fake_graph = FakeGraph()
+
+        with patch.object(research_stream, "_streaming_research_graph_override", fake_graph):
+            events = asyncio.run(
+                _collect_stream_events(
+                    research_stream.stream_research_events(
+                        "test query",
+                        run_id="run-test",
+                        thread_id="thread-1",
+                    )
+                )
+            )
+
+        self.assertEqual(fake_graph.state["thread_id"], "thread-1")
+        self.assertEqual(fake_graph.config["configurable"]["thread_id"], "thread-1")
+        self.assertEqual(fake_graph.config["metadata"]["run_id"], "run-test")
+        values_payload = json.loads(
+            [event for event in events if event.startswith("event: values")][0].split("data: ", 1)[1]
         )
-        self.assertEqual(complete_payload["answer"], "LangGraph handled this.")
+        self.assertEqual(values_payload["answer"], "Thread-aware graph handled this.")
+
+    def test_background_research_run_passes_thread_id_to_stream(self):
+        from agents.research_stream import format_sse_event
+        from routers import research
+
+        seen = {}
+
+        async def fake_stream(
+            query,
+            run_id=None,
+            thread_id=None,
+            display_query=None,
+            store=None,
+            latest_result=None,
+            execution_mode="auto",
+            on_complete=None,
+        ):
+            seen["thread_id"] = thread_id
+            yield format_sse_event("values", {"query": display_query, "status": "completed"})
+            yield format_sse_event("end", None)
+
+        class FakeRunStore:
+            def append_event(self, *_args, **_kwargs):
+                return None
+
+        with patch.object(research, "stream_research_events", fake_stream):
+            asyncio.run(
+                research._run_research_to_store(
+                    "contextual query",
+                    run_id="run-test",
+                    user_id="user-1",
+                    thread_id="thread-1",
+                    display_query="visible query",
+                    store=FakeRunStore(),
+                )
+            )
+
+        self.assertEqual(seen["thread_id"], "thread-1")
+
+    def test_thread_checkpoint_carries_latest_result_between_runs(self):
+        from agents import research_stream
+
+        classifier_states = []
+
+        async def fake_classify_node(state):
+            classifier_states.append(dict(state))
+            return {"intent": "direct_answer", "reason": "test route"}
+
+        async def fake_direct_node(state):
+            yield {
+                "type": "final",
+                "state": {
+                    "answer": f"answer for {state.get('display_query')}",
+                    "result_type": "answer",
+                    "report_completed": True,
+                },
+            }
+
+        thread_id = f"thread-{uuid.uuid4().hex}"
+
+        with (
+            patch.object(research_stream, "classify_research_intent_node", fake_classify_node),
+            patch.object(research_stream, "stream_answer_direct_node", fake_direct_node),
+        ):
+            asyncio.run(
+                _collect_stream_events(
+                    research_stream.stream_research_events("first query", thread_id=thread_id)
+                )
+            )
+            asyncio.run(
+                _collect_stream_events(
+                    research_stream.stream_research_events("second query", thread_id=thread_id)
+                )
+            )
+
+        self.assertIsNone(classifier_states[0].get("latest_result"))
+        self.assertEqual(classifier_states[1]["latest_result"]["answer"], "answer for first query")
 
     def test_stream_forwards_react_custom_events_before_node_update(self):
         from agents import research_stream
@@ -233,17 +342,13 @@ class ResearchStreamTests(TestCase):
                 )
             )
 
-        trace_payloads = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: trace")
-        ]
-        answer_index = next(index for index, event in enumerate(events) if event.startswith("event: answer"))
-        custom_trace_indexes = [
-            index
-            for index, event in enumerate(events)
-            if event.startswith("event: trace") and '"title":"Select next action"' in event
-        ]
+        trace_payloads = _custom_payloads(events, "trace")
+        answer_index = _custom_event_indexes(events, "answer")[0]
+        custom_trace_indexes = _custom_event_indexes(
+            events,
+            "trace",
+            lambda payload: payload.get("title") == "Select next action",
+        )
 
         self.assertEqual([payload["title"] for payload in trace_payloads].count("Select next action"), 1)
         self.assertTrue(custom_trace_indexes)
@@ -302,15 +407,11 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(classifier_states[-1]["resolved_query"], "What is hasmokan's Codeforces rating?")
         self.assertEqual(search_states[-1]["search_query"], "hasmokan Codeforces rating")
 
-        agent_messages = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: agent_message")
-        ]
+        agent_messages = _payloads(events, "messages")
         search_trace = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: trace") and '"title":"Search web"' in event
+            payload
+            for payload in _custom_payloads(events, "trace")
+            if payload["title"] == "Search web"
         ][0]
 
         self.assertEqual(agent_messages[0]["tool_calls"][0]["args"]["query"], "hasmokan Codeforces rating")
@@ -358,11 +459,7 @@ class ResearchStreamTests(TestCase):
         ):
             events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("写代码")))
 
-        trace_payloads = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: trace")
-        ]
+        trace_payloads = _custom_payloads(events, "trace")
 
         self.assertEqual(trace_payloads[0]["title"], "Route selected")
         self.assertEqual(trace_payloads[0]["route"], "answer_coding")
@@ -445,11 +542,7 @@ class ResearchStreamTests(TestCase):
         ):
             events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
 
-        thinking_payloads = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: thinking")
-        ]
+        thinking_payloads = _custom_payloads(events, "thinking")
 
         self.assertEqual(
             [(payload["id"], payload["text"]) for payload in thinking_payloads],
@@ -528,14 +621,14 @@ class ResearchStreamTests(TestCase):
             )
 
         event_names = [event.split("\n", 1)[0] for event in events]
-        self.assertIn("event: agent_message", event_names)
-        self.assertIn("event: answer", event_names)
-        self.assertIn("event: complete", event_names)
-        trace_payloads = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: trace")
-        ]
+        self.assertIn("event: messages", event_names)
+        self.assertIn("event: custom", event_names)
+        self.assertIn("event: values", event_names)
+        self.assertIn("event: end", event_names)
+        self.assertNotIn("event: agent_message", event_names)
+        self.assertNotIn("event: answer", event_names)
+        self.assertNotIn("event: complete", event_names)
+        trace_payloads = _custom_payloads(events, "trace")
         self.assertEqual(trace_payloads[0]["title"], "Route selected")
         self.assertEqual(trace_payloads[0]["route"], "web_search")
         self.assertEqual(trace_payloads[1]["stage"], "react")
@@ -557,12 +650,10 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(trace_payloads[5]["detail"], "test query")
         self.assertEqual(trace_payloads[6]["documents"][0]["title"], "Example Source")
 
-        complete_payload = json.loads(
-            [event for event in events if event.startswith("event: complete")][0].split("data: ", 1)[1]
-        )
-        self.assertEqual(complete_payload["answer"], "Here is the sourced answer.")
-        self.assertEqual(complete_payload["result_type"], "answer")
-        self.assertEqual(complete_payload["status"], "completed")
+        values_payload = _payloads(events, "values")[0]
+        self.assertEqual(values_payload["answer"], "Here is the sourced answer.")
+        self.assertEqual(values_payload["result_type"], "answer")
+        self.assertEqual(values_payload["status"], "completed")
 
     def test_sandbox_trace_details_include_action_parameters(self):
         from agents.nodes.conversation_router import (
@@ -633,14 +724,8 @@ class ResearchStreamTests(TestCase):
         ):
             events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
 
-        token_payloads = [
-            json.loads(event.split("data: ", 1)[1])
-            for event in events
-            if event.startswith("event: token_usage")
-        ]
-        complete_payload = json.loads(
-            [event for event in events if event.startswith("event: complete")][0].split("data: ", 1)[1]
-        )
+        token_payloads = _custom_payloads(events, "token_usage")
+        values_payload = _payloads(events, "values")[0]
 
         self.assertEqual(
             token_payloads,
@@ -652,7 +737,84 @@ class ResearchStreamTests(TestCase):
                 }
             ],
         )
-        self.assertEqual(complete_payload["token_usage"], token_payloads[-1])
+        self.assertEqual(values_payload["token_usage"], token_payloads[-1])
+
+    def test_stream_emits_langgraph_events_by_default(self):
+        from agents import research_stream
+
+        async def fake_direct_answer_node(state):
+            yield {"type": "answer_delta", "delta": "Done"}
+            yield {
+                "type": "final",
+                "state": {
+                    "answer": "Done",
+                    "result_type": "answer",
+                    "report_completed": True,
+                },
+            }
+
+        with (
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                return_value={"intent": "direct_answer", "reason": "test"},
+            ),
+            patch.object(research_stream, "stream_answer_direct_node", fake_direct_answer_node),
+        ):
+            events = asyncio.run(_collect_stream_events(research_stream.stream_research_events("test query")))
+
+        event_names = [event.split("\n", 1)[0] for event in events]
+        self.assertIn("event: custom", event_names)
+        self.assertIn("event: values", event_names)
+        self.assertIn("event: end", event_names)
+        self.assertNotIn("event: complete", event_names)
+
+        custom_payloads = _payloads(events, "custom")
+        values_payload = _payloads(events, "values")[-1]
+        end_payload = _payloads(events, "end")[-1]
+
+        self.assertIn(
+            {"type": "answer_delta", "data": {"delta": "Done"}},
+            custom_payloads,
+        )
+        self.assertEqual(values_payload["answer"], "Done")
+        self.assertEqual(values_payload["result_type"], "answer")
+        self.assertIsNone(end_payload)
+
+    def test_trace_events_include_parent_child_agent_context(self):
+        from agents import research_stream
+
+        async def fake_direct_answer_node(state):
+            yield {
+                "type": "final",
+                "state": {
+                    "answer": "Done",
+                    "result_type": "answer",
+                    "report_completed": True,
+                },
+            }
+
+        with (
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                return_value={"intent": "direct_answer", "reason": "test"},
+            ),
+            patch.object(research_stream, "stream_answer_direct_node", fake_direct_answer_node),
+        ):
+            events = asyncio.run(
+                _collect_stream_events(
+                    research_stream.stream_research_events("test query", run_id="run-test")
+                )
+            )
+
+        trace_payloads = _custom_payloads(events, "trace")
+        route_trace = next(payload for payload in trace_payloads if payload["stage"] == "route")
+
+        self.assertEqual(route_trace["agent_run_id"], "run-test:agent:router")
+        self.assertEqual(route_trace["parent_run_id"], "run-test:agent:research")
+        self.assertEqual(route_trace["agent_path"], ["research", "router"])
+        self.assertEqual(route_trace["agent_label"], "Router Agent")
 
     def test_stream_route_returns_text_event_stream(self):
         from agents.research_stream import format_sse_event
@@ -661,18 +823,21 @@ class ResearchStreamTests(TestCase):
         async def fake_stream(
             query,
             run_id=None,
+            thread_id=None,
             display_query=None,
             store=None,
             latest_result=None,
             execution_mode="auto",
             on_complete=None,
         ):
-            yield format_sse_event("status", {"stage": "search", "message": query})
-            yield format_sse_event("complete", {"query": query, "status": "completed"})
+            yield format_sse_event("custom", {"type": "status", "data": {"stage": "search", "message": query}})
+            yield format_sse_event("values", {"query": query, "status": "completed"})
+            yield format_sse_event("end", None)
 
         async def fake_persisted_stream(run_id, user_id, store=None):
-            yield format_sse_event("status", {"stage": "search", "message": "test query"})
-            yield format_sse_event("complete", {"query": "test query", "status": "completed"})
+            yield format_sse_event("custom", {"type": "status", "data": {"stage": "search", "message": "test query"}})
+            yield format_sse_event("values", {"query": "test query", "status": "completed"})
+            yield format_sse_event("end", None)
 
         client = TestClient(app)
 
@@ -692,9 +857,10 @@ class ResearchStreamTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/event-stream", response.headers["content-type"])
-        self.assertIn("event: status", response.text)
+        self.assertIn("event: custom", response.text)
         self.assertIn('"message":"test query"', response.text)
-        self.assertIn("event: complete", response.text)
+        self.assertIn("event: values", response.text)
+        self.assertIn("event: end", response.text)
 
     def test_stream_route_emits_metadata_event_with_run_id(self):
         from agents.research_stream import format_sse_event
@@ -702,7 +868,8 @@ class ResearchStreamTests(TestCase):
 
         async def fake_persisted_stream(run_id, user_id, store=None):
             yield format_sse_event("metadata", {"run_id": run_id})
-            yield format_sse_event("complete", {"query": "test query", "status": "completed"})
+            yield format_sse_event("values", {"query": "test query", "status": "completed"})
+            yield format_sse_event("end", None)
 
         client = TestClient(app)
 
@@ -721,6 +888,7 @@ class ResearchStreamTests(TestCase):
                     async def fake_stream(
                         query,
                         run_id=None,
+                        thread_id=None,
                         display_query=None,
                         store=None,
                         latest_result=None,
@@ -728,7 +896,8 @@ class ResearchStreamTests(TestCase):
                         on_complete=None,
                     ):
                         self.assertEqual(run_id, "run-test")
-                        yield 'event: complete\ndata: {"query":"test query","status":"completed"}\n\n'
+                        yield 'event: values\ndata: {"query":"test query","status":"completed"}\n\n'
+                        yield "event: end\ndata: null\n\n"
 
                     stream.side_effect = fake_stream
                     response = client.get("/api/research/stream?query=test%20query")
@@ -742,10 +911,19 @@ class ResearchStreamTests(TestCase):
 
         async def fake_persisted_stream(run_id, user_id, store=None):
             yield format_sse_event("metadata", {"run_id": run_id})
-            yield format_sse_event("complete", {"query": "test query", "status": "completed"})
+            yield format_sse_event("values", {"query": "test query", "status": "completed"})
+            yield format_sse_event("end", None)
 
-        async def unused_live_stream(query, run_id=None, display_query=None, store=None, latest_result=None, on_complete=None):
-            yield format_sse_event("stream_error", {"detail": "live stream should not be used"})
+        async def unused_live_stream(
+            query,
+            run_id=None,
+            thread_id=None,
+            display_query=None,
+            store=None,
+            latest_result=None,
+            on_complete=None,
+        ):
+            yield format_sse_event("error", {"message": "live stream should not be used"})
 
         client = TestClient(app)
 
@@ -770,7 +948,8 @@ class ResearchStreamTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("event: metadata", response.text)
-        self.assertIn("event: complete", response.text)
+        self.assertIn("event: values", response.text)
+        self.assertIn("event: end", response.text)
         self.assertEqual(start_background.call_count, 1)
 
     def test_run_stream_route_replays_persisted_events(self):
@@ -794,9 +973,10 @@ class ResearchStreamTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/event-stream", response.headers["content-type"])
-        self.assertIn("event: status", response.text)
+        self.assertIn("event: custom", response.text)
         self.assertIn('"message":"Searching"', response.text)
-        self.assertIn("event: complete", response.text)
+        self.assertIn("event: values", response.text)
+        self.assertIn("event: end", response.text)
 
     def test_get_run_route_returns_persisted_events(self):
         from routers import research
@@ -823,6 +1003,40 @@ class ResearchStreamTests(TestCase):
 
 async def _collect_stream_events(stream):
     return [event async for event in stream]
+
+
+def _parse_sse_event(event):
+    event_name = None
+    data_lines = []
+    for line in event.splitlines():
+        if line.startswith("event: "):
+            event_name = line[len("event: "):].strip()
+        elif line.startswith("data: "):
+            data_lines.append(line[len("data: "):])
+    return event_name, json.loads("\n".join(data_lines)) if data_lines else None
+
+
+def _payloads(events, event_name):
+    return [payload for name, payload in map(_parse_sse_event, events) if name == event_name]
+
+
+def _custom_payloads(events, stream_type):
+    return [
+        payload["data"]
+        for payload in _payloads(events, "custom")
+        if payload.get("type") == stream_type
+    ]
+
+
+def _custom_event_indexes(events, stream_type, predicate=lambda payload: True):
+    indexes = []
+    for index, event in enumerate(events):
+        event_name, payload = _parse_sse_event(event)
+        if event_name != "custom" or payload.get("type") != stream_type:
+            continue
+        if predicate(payload["data"]):
+            indexes.append(index)
+    return indexes
 
 
 class EmptyMemoryStore:

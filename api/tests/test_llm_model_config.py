@@ -376,13 +376,14 @@ class ResearchRouterThinkingTests(TestCase):
         async def fake_stream(
             query,
             run_id=None,
+            thread_id=None,
             display_query=None,
             store=None,
             latest_result=None,
             execution_mode="auto",
             on_complete=None,
         ):
-            yield format_sse_event("complete", {
+            yield format_sse_event("values", {
                 "query": display_query,
                 "documents": [],
                 "analysis": "analysis answer",
@@ -391,6 +392,7 @@ class ResearchRouterThinkingTests(TestCase):
                 "report_thinking": "report thinking",
                 "status": "completed",
             })
+            yield format_sse_event("end", None)
 
         with (
             patch.object(research, "stream_research_events", fake_stream),
