@@ -41,6 +41,36 @@ class ResearchStreamTests(TestCase):
             'event: status\ndata: {"stage":"search","message":"Searching"}\n\n',
         )
 
+    def test_langgraph_sse_frames_forwards_report_delta(self):
+        from agents.research_stream import format_sse_event, langgraph_sse_frames
+
+        frame = format_sse_event("report_delta", {"delta": "# Draft"})
+
+        self.assertEqual(
+            langgraph_sse_frames(frame),
+            [format_sse_event("custom", {"type": "report_delta", "data": {"delta": "# Draft"}})],
+        )
+
+    def test_collect_streaming_node_events_publishes_report_chunks(self):
+        from agents.research_stream import _collect_streaming_node_events
+
+        async def fake_stream():
+            yield {"type": "report_delta", "delta": "# Draft"}
+            yield {"type": "final", "state": {"report": "# Draft", "report_completed": True}}
+
+        published = []
+        result = asyncio.run(_collect_streaming_node_events(
+            fake_stream(),
+            writer=published.append,
+            node_name="generate",
+        ))
+
+        self.assertEqual(
+            published,
+            [{"node": "generate", "event": {"type": "report_delta", "delta": "# Draft"}}],
+        )
+        self.assertEqual(result["report"], "# Draft")
+
     def test_stream_emits_trace_events_for_tool_call_and_sources(self):
         from agents import research_stream
 

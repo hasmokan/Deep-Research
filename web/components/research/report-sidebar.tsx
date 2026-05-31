@@ -4,7 +4,7 @@
  * Right-side report artifact panel for completed research.
  */
 
-import { CheckCircle2, Download, ExternalLink, FileText, Maximize2, X } from 'lucide-react';
+import { CheckCircle2, Download, ExternalLink, FileText, Loader2, Maximize2, X } from 'lucide-react';
 import type { Document, ResearchResult } from '@/lib/api/types';
 import { Button } from '@/components/ui/button';
 import { useResizablePanel } from '@/lib/research/resizable-panels';
@@ -47,6 +47,7 @@ export function ReportSidebar({
   onClose,
 }: ReportSidebarProps) {
   const hasDocuments = result.documents && result.documents.length > 0;
+  const isComplete = result.status === 'completed';
   const sidebarWidth = useResizablePanel({
     defaultWidth: REPORT_SIDEBAR_WIDTH.defaultWidth,
     constraints: REPORT_SIDEBAR_WIDTH.constraints,
@@ -128,8 +129,12 @@ export function ReportSidebar({
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <div className="mx-auto max-w-[440px] rounded-[12px] border border-border bg-card px-4 py-4 shadow-[0_10px_36px_rgba(0,0,0,0.07)] dark:shadow-[0_10px_36px_rgba(0,0,0,0.28)]">
           <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs text-muted-foreground">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Research complete
+            {isComplete ? (
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            ) : (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            )}
+            {isComplete ? 'Research complete' : 'Writing report'}
           </div>
 
           {result.report ? (

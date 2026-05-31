@@ -209,6 +209,7 @@ export interface ResearchStreamHandlers {
   onThinking?: (thinking: ResearchStreamThinking) => void;
   onAnalysis?: (analysis: string | null) => void;
   onReport?: (report: string | null) => void;
+  onReportDelta?: (delta: string) => void;
   onAnswerDelta?: (delta: string) => void;
   onAnswer?: (answer: string | null) => void;
   onTokenUsage?: (usage: TokenUsage) => void;

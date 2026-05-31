@@ -2,9 +2,59 @@
 
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
+from unittest.mock import patch
 
 
 class ReactAgentTests(IsolatedAsyncioTestCase):
+    async def test_uses_langchain_create_agent_runtime(self):
+        from agents import react_agent
+
+        calls = {}
+
+        class FakeAgentRuntime:
+            async def astream(self, inputs, config=None, stream_mode=None, version=None):
+                calls["inputs"] = inputs
+                calls["config"] = config
+                calls["stream_mode"] = stream_mode
+                calls["version"] = version
+                yield {
+                    "type": "updates",
+                    "data": {
+                        "model": {
+                            "messages": [
+                                SimpleNamespace(
+                                    id="ai-final",
+                                    content="Runtime final answer.",
+                                    additional_kwargs={},
+                                    tool_calls=[],
+                                )
+                            ]
+                        }
+                    },
+                }
+
+        def fake_create_agent(**kwargs):
+            calls["create_agent"] = kwargs
+            return FakeAgentRuntime()
+
+        with patch.object(react_agent, "create_agent", fake_create_agent):
+            events = [
+                event
+                async for event in react_agent.stream_react_agent_messages(
+                    "Use the runtime",
+                    model=SimpleNamespace(),
+                    skills=[],
+                )
+            ]
+
+        self.assertEqual(calls["create_agent"]["model"], SimpleNamespace())
+        self.assertEqual(calls["create_agent"]["tools"], [react_agent.web_search_tool, react_agent.ask_clarification_tool])
+        self.assertIn("ReAct research assistant", calls["create_agent"]["system_prompt"])
+        self.assertEqual(calls["inputs"]["messages"][0].content, "Use the runtime")
+        self.assertEqual(calls["stream_mode"], ["updates"])
+        self.assertEqual(calls["version"], "v2")
+        self.assertEqual(events[-1], {"type": "final", "answer": "Runtime final answer."})
+
     async def test_streams_reason_action_observation_then_final_answer(self):
         from agents.react_agent import stream_react_agent_messages
 
@@ -154,7 +204,7 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
         self.assertEqual(model.calls, 3)
         self.assertIn("stop calling tools", model.invocations[-1][-1].content.lower())
 
-    async def test_warns_model_before_repeating_identical_tool_calls_again(self):
+    async def test_runtime_carries_repeated_tool_observations_between_model_calls(self):
         from langchain_core.messages import ToolMessage
 
         from agents.react_agent import stream_react_agent_messages
@@ -201,10 +251,9 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
             )
         ]
 
-        warning_invocation = model.invocations[2]
-        self.assertIsInstance(warning_invocation[-2], ToolMessage)
-        self.assertIn("repeating the same tool call", warning_invocation[-1].content)
-        self.assertIn("answer from the gathered evidence", warning_invocation[-1].content)
+        third_invocation = model.invocations[2]
+        self.assertIsInstance(third_invocation[-1], ToolMessage)
+        self.assertIn("Repeated result", third_invocation[-1].content)
         self.assertEqual(events[-1]["answer"], "The repeated search results point to the same answer.")
 
     async def test_does_not_emit_unpaired_tool_calls_from_final_synthesis(self):
@@ -307,14 +356,14 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
         from agents.react_agent import stream_react_agent_messages
         from agents.skills import AgentSkill
 
-        captured_system_prompts = []
+        captured_invocations = []
 
         class FakeModel:
             def __init__(self):
                 self.calls = 0
 
             async def ainvoke(self, messages, config=None):
-                captured_system_prompts.append(messages[0].content)
+                captured_invocations.append(list(messages))
                 self.calls += 1
                 if self.calls == 1:
                     return SimpleNamespace(
@@ -353,8 +402,8 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
         ]
 
         self.assertEqual([event["type"] for event in events], ["agent_message", "trace", "agent_message", "final"])
-        self.assertNotIn("Prefer source-backed identity checks", captured_system_prompts[0])
-        self.assertIn("Prefer source-backed identity checks", captured_system_prompts[1])
+        self.assertNotIn("Prefer source-backed identity checks", captured_invocations[0][0].content)
+        self.assertIn("Prefer source-backed identity checks", captured_invocations[1][-1].content)
         self.assertEqual(events[1]["kind"], "skill")
         self.assertEqual(events[1]["title"], "Skill loaded")
         self.assertEqual(events[1]["skills"][0]["name"], "identity-research")

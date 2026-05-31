@@ -7,7 +7,7 @@ import json
 from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts

@@ -330,9 +330,11 @@ class LlmNodeModelTests(TestCase):
         self.assertEqual(events[0]["type"], "thinking")
         self.assertEqual(events[0]["id"], "report-thinking")
         self.assertEqual(events[0]["text"], "planning report")
-        self.assertEqual(events[1]["type"], "final")
-        self.assertEqual(events[1]["state"]["report"], "# Final Report")
-        self.assertEqual(events[1]["state"]["report_thinking"], "planning report")
+        self.assertEqual(events[1]["type"], "report_delta")
+        self.assertEqual(events[1]["delta"], "# Final Report")
+        self.assertEqual(events[2]["type"], "final")
+        self.assertEqual(events[2]["state"]["report"], "# Final Report")
+        self.assertEqual(events[2]["state"]["report_thinking"], "planning report")
 
     def test_stream_generate_node_yields_visible_draft_content_deltas(self):
         from agents.nodes import generate
@@ -358,13 +360,17 @@ class LlmNodeModelTests(TestCase):
                 "analysis": "test analysis",
             })))
 
-        self.assertEqual(events[0]["type"], "draft")
-        self.assertEqual(events[0]["id"], "report-draft")
-        self.assertEqual(events[0]["text"], "# Report")
+        self.assertEqual(events[0]["type"], "report_delta")
+        self.assertEqual(events[0]["delta"], "# Report\n\n")
         self.assertEqual(events[1]["type"], "draft")
-        self.assertEqual(events[1]["text"], "# Report\n\nFinding one.")
-        self.assertEqual(events[2]["type"], "final")
-        self.assertEqual(events[2]["state"]["report"], "# Report\n\nFinding one.")
+        self.assertEqual(events[1]["id"], "report-draft")
+        self.assertEqual(events[1]["text"], "# Report")
+        self.assertEqual(events[2]["type"], "report_delta")
+        self.assertEqual(events[2]["delta"], "Finding one.")
+        self.assertEqual(events[3]["type"], "draft")
+        self.assertEqual(events[3]["text"], "# Report\n\nFinding one.")
+        self.assertEqual(events[4]["type"], "final")
+        self.assertEqual(events[4]["state"]["report"], "# Report\n\nFinding one.")
 
 
 class ResearchRouterThinkingTests(TestCase):

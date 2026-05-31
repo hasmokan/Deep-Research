@@ -1,19 +1,18 @@
-"""Minimal ReAct agent loop.
-
-This module keeps the loop small and explicit:
-model reasoning/tool_calls -> local tool execution -> ToolMessage observation -> model again.
-"""
+"""LangChain ReAct agent runtime adapter."""
 
 from __future__ import annotations
 
-import inspect
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain.agents import create_agent
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
+from langgraph.errors import GraphRecursionError
 
 from agents.nodes.reasoning import extract_response_parts
 from agents.nodes.web_search import web_search_node
@@ -59,93 +58,114 @@ async def stream_react_agent_messages(
     skills: list[AgentSkill] | None = None,
     max_rounds: int = 4,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Stream a minimal ReAct exchange as serializable message events."""
+    """Stream a LangChain agent exchange as serializable message events."""
     available_skills = load_enabled_skills() if skills is None else list(skills)
-    loaded_skills: list[AgentSkill] = []
     loaded_skill_names: set[str] = set()
-    runnable_model = model or _build_model(available_skills)
+    runnable_model = _ensure_chat_model(model or _build_model())
     runner = tool_runner or _run_builtin_tool
-    messages: list[Any] = [
-        SystemMessage(content=build_react_system_prompt(loaded_skills, available_skills=available_skills)),
+    tools = _runtime_react_tools(available_skills, runner)
+    system_prompt = build_react_system_prompt([], available_skills=available_skills)
+    agent = create_agent(
+        model=runnable_model,
+        tools=tools,
+        system_prompt=system_prompt,
+    )
+    messages_for_fallback: list[Any] = [
+        SystemMessage(content=system_prompt),
         HumanMessage(content=query),
     ]
-    previous_tool_call_signature: tuple[tuple[str, str], ...] | None = None
-    repeated_tool_call_count = 0
+    tool_calls_by_id: dict[str, dict[str, Any]] = {}
+    tool_rounds_used = 0
+    pending_tool_results = 0
 
-    for _round in range(max_rounds):
-        messages[0] = SystemMessage(
-            content=build_react_system_prompt(
-                loaded_skills,
-                available_skills=_unloaded_skills(available_skills, loaded_skill_names),
-            )
-        )
-        response = await runnable_model.ainvoke(
-            messages,
-            _langchain_config("react-agent-llm", "react"),
-        )
-        messages.append(response)
+    try:
+        async for chunk in agent.astream(
+            {"messages": [HumanMessage(content=query)]},
+            config=_agent_runtime_config(max_rounds),
+            stream_mode=["updates"],
+            version="v2",
+        ):
+            for node_name, update in _agent_update_items(chunk):
+                for message in _messages_from_agent_update(update):
+                    message_type = getattr(message, "type", None)
 
-        ai_message = _serialize_ai_message(response)
-        yield {"type": "agent_message", "message": ai_message}
+                    if node_name == "model" or message_type == "ai":
+                        ai_message = _serialize_ai_message(message)
+                        tool_calls = ai_message.get("tool_calls") or []
+                        if tool_calls and tool_rounds_used >= max_rounds:
+                            async for event in _synthesize_final_answer(runnable_model, messages_for_fallback):
+                                yield event
+                            return
 
-        tool_calls = ai_message.get("tool_calls") or []
-        if not tool_calls:
-            answer = str(ai_message.get("content") or "").strip()
-            yield {"type": "final", "answer": answer}
-            return
+                        messages_for_fallback.append(message)
+                        yield {"type": "agent_message", "message": ai_message}
 
-        for tool_call in tool_calls:
-            tool_name = str(tool_call.get("name") or "")
-            tool_args = tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {}
-            tool_call_id = str(tool_call.get("id") or tool_name)
+                        for tool_call in tool_calls:
+                            tool_call_id = str(tool_call.get("id") or tool_call.get("name") or "")
+                            if tool_call_id:
+                                tool_calls_by_id[tool_call_id] = tool_call
 
-            if tool_name == "load_skill":
-                skill = _find_skill(available_skills, tool_args)
-                already_loaded = bool(skill and skill.name in loaded_skill_names)
-                if skill and not already_loaded:
-                    loaded_skills.append(skill)
-                    loaded_skill_names.add(skill.name)
-                content = _load_skill_tool_content(tool_args, skill, already_loaded=already_loaded)
-                messages.append(ToolMessage(content=content, tool_call_id=tool_call_id, name=tool_name))
-                yield _skill_loaded_trace_event(tool_args, skill, already_loaded=already_loaded)
-                continue
+                        if tool_calls:
+                            tool_rounds_used += 1
+                            pending_tool_results += len(tool_calls)
 
-            if tool_name == "ask_clarification":
-                content = _format_clarification(tool_args)
-                tool_message = _tool_message_payload(tool_call_id, tool_name, content)
-                messages.append(ToolMessage(content=content, tool_call_id=tool_call_id, name=tool_name))
-                yield {"type": "agent_message", "message": tool_message}
-                yield {
-                    "type": "clarification",
-                    "question": str(tool_args.get("question") or "").strip(),
-                    "options": _normalize_options(tool_args.get("options")),
-                    "message": content,
-                }
-                return
+                        if not tool_calls:
+                            answer = str(ai_message.get("content") or "").strip()
+                            yield {"type": "final", "answer": answer}
+                            return
+                        continue
 
-            result = runner(tool_name, tool_args)
-            if inspect.isawaitable(result):
-                result = await result
+                    if node_name == "tools" or message_type == "tool":
+                        messages_for_fallback.append(message)
+                        tool_name = str(getattr(message, "name", None) or "")
+                        tool_call_id = str(getattr(message, "tool_call_id", None) or tool_name)
+                        tool_call = tool_calls_by_id.get(tool_call_id, {})
+                        tool_args = tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {}
+                        content = str(getattr(message, "content", "") or "")
 
-            content = _tool_result_content(result)
-            messages.append(ToolMessage(content=content, tool_call_id=tool_call_id, name=tool_name))
-            yield {
-                "type": "agent_message",
-                "message": _tool_message_payload(tool_call_id, tool_name, content),
-            }
+                        if tool_name == "load_skill":
+                            skill = _find_skill(available_skills, tool_args)
+                            already_loaded = bool(skill and skill.name in loaded_skill_names)
+                            if skill and not already_loaded:
+                                loaded_skill_names.add(skill.name)
+                            yield _skill_loaded_trace_event(tool_args, skill, already_loaded=already_loaded)
+                            if pending_tool_results:
+                                pending_tool_results -= 1
+                            if pending_tool_results == 0 and tool_rounds_used >= max_rounds:
+                                async for event in _synthesize_final_answer(runnable_model, messages_for_fallback):
+                                    yield event
+                                return
+                            continue
 
-        tool_call_signature = _tool_call_signature(tool_calls)
-        if tool_call_signature == previous_tool_call_signature:
-            repeated_tool_call_count += 1
-        else:
-            previous_tool_call_signature = tool_call_signature
-            repeated_tool_call_count = 1
+                        tool_message = _tool_message_payload(tool_call_id, tool_name, content)
+                        yield {"type": "agent_message", "message": tool_message}
 
-        if repeated_tool_call_count == 2:
-            messages.append(HumanMessage(content=_REPEATED_TOOL_CALL_WARNING))
+                        if tool_name == "ask_clarification":
+                            yield {
+                                "type": "clarification",
+                                "question": str(tool_args.get("question") or "").strip(),
+                                "options": _normalize_options(tool_args.get("options")),
+                                "message": content,
+                            }
+                            return
 
+                        if pending_tool_results:
+                            pending_tool_results -= 1
+                        if pending_tool_results == 0 and tool_rounds_used >= max_rounds:
+                            async for event in _synthesize_final_answer(runnable_model, messages_for_fallback):
+                                yield event
+                            return
+    except GraphRecursionError:
+        async for event in _synthesize_final_answer(runnable_model, messages_for_fallback):
+            yield event
+        return
+
+    yield {"type": "final", "answer": _partial_answer_fallback(messages_for_fallback)}
+
+
+async def _synthesize_final_answer(model: Any, messages: list[Any]) -> AsyncIterator[dict[str, Any]]:
     messages.append(HumanMessage(content=_FINAL_SYNTHESIS_INSTRUCTION))
-    synthesis_model = _model_without_tools(runnable_model)
+    synthesis_model = _model_without_tools(model)
     response = await synthesis_model.ainvoke(
         messages,
         _langchain_config("react-agent-final-synthesis", "final_synthesis"),
@@ -179,6 +199,49 @@ def build_react_system_prompt(
     if skill_prompt:
         blocks.append(skill_prompt)
     return "\n\n".join(blocks) + "\n"
+
+
+class _RunnableChatModelAdapter(BaseChatModel):
+    runnable: Any
+
+    @property
+    def _llm_type(self) -> str:
+        return "runnable-chat-adapter"
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> "_RunnableChatModelAdapter":
+        return self
+
+    def _generate(self, messages: list[Any], stop: Any = None, run_manager: Any = None, **kwargs: Any) -> ChatResult:
+        raise NotImplementedError("The runnable chat adapter only supports async generation")
+
+    async def _agenerate(
+        self,
+        messages: list[Any],
+        stop: Any = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        response = await self.runnable.ainvoke(messages)
+        return ChatResult(generations=[ChatGeneration(message=_coerce_ai_message(response))])
+
+
+def _ensure_chat_model(model: Any) -> Any:
+    if callable(getattr(model, "bind_tools", None)):
+        return model
+    if callable(getattr(model, "ainvoke", None)):
+        return _RunnableChatModelAdapter(runnable=model)
+    return model
+
+
+def _coerce_ai_message(message: Any) -> AIMessage:
+    if isinstance(message, AIMessage):
+        return message
+    return AIMessage(
+        content=str(getattr(message, "content", "") or ""),
+        id=getattr(message, "id", None),
+        additional_kwargs=getattr(message, "additional_kwargs", {}) or {},
+        tool_calls=list(getattr(message, "tool_calls", None) or []),
+    )
 
 
 def _format_skill_catalog_for_prompt(skills: list[AgentSkill]) -> str:
@@ -262,7 +325,7 @@ def _skill_trace_item(skill: AgentSkill) -> dict[str, Any]:
 
 
 def _build_model(skills: list[AgentSkill] | None = None) -> Any:
-    llm = ChatOpenAI(
+    return ChatOpenAI(
         model=settings.llm_model,
         temperature=0.2,
         api_key=settings.openai_api_key,
@@ -270,7 +333,6 @@ def _build_model(skills: list[AgentSkill] | None = None) -> Any:
         extra_body={"reasoning_split": True},
         stream_usage=True,
     )
-    return llm.bind_tools(available_react_tools_for_skills(skills or []))
 
 
 def _model_without_tools(model: Any) -> Any:
@@ -327,6 +389,73 @@ def available_react_tools_for_skills(skills: list[AgentSkill] | None = None) -> 
     if not available_skills:
         return base_tools
     return [load_skill_tool, *base_tools]
+
+
+def _runtime_react_tools(available_skills: list[AgentSkill], runner: ToolRunner) -> list[Any]:
+    if not available_skills and runner is _run_builtin_tool:
+        return available_react_tools_for_skills([])
+
+    @tool("web_search", parse_docstring=True)
+    async def runtime_web_search_tool(query: str) -> str:
+        """Search the public web for relevant sources.
+
+        Args:
+            query: Search query.
+        """
+        result = runner("web_search", {"query": query})
+        if hasattr(result, "__await__"):
+            result = await result
+        return _tool_result_content(result)
+
+    @tool("load_skill", parse_docstring=True)
+    def runtime_load_skill_tool(name: str) -> str:
+        """Load one available skill by exact name before applying its workflow.
+
+        Args:
+            name: Exact skill name from the available skill catalog.
+        """
+        skill = _find_skill(available_skills, {"name": name})
+        if skill is None:
+            return f"Skill not found: {name}. Use one of the available skill names exactly."
+        return "\n\n".join(
+            [
+                f"Loaded skill: {skill.name}.",
+                "Apply this skill guidance in subsequent reasoning:",
+                skill.content,
+            ]
+        )
+
+    base_tools = filter_tools_by_skill_allowed_tools([runtime_web_search_tool, ask_clarification_tool], available_skills)
+    if not available_skills:
+        return base_tools
+    return [runtime_load_skill_tool, *base_tools]
+
+
+def _agent_runtime_config(max_rounds: int) -> dict[str, Any]:
+    config = dict(_langchain_config("react-agent", "react"))
+    config["recursion_limit"] = max(2 * max_rounds + 1, 3)
+    return config
+
+
+def _agent_update_items(chunk: Any) -> list[tuple[str, Any]]:
+    if isinstance(chunk, dict) and chunk.get("type") == "updates":
+        data = chunk.get("data")
+    else:
+        data = chunk
+
+    if not isinstance(data, dict):
+        return []
+
+    return [(str(node_name), update) for node_name, update in data.items()]
+
+
+def _messages_from_agent_update(update: Any) -> list[Any]:
+    if not isinstance(update, dict):
+        return []
+    messages = update.get("messages")
+    if not isinstance(messages, list):
+        return []
+    return messages
 
 
 async def _run_builtin_tool(name: str, args: dict[str, Any]) -> Any:

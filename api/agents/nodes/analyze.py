@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 from typing import Any
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts
 from agents.token_usage import TokenUsageAccumulator, extract_token_usage

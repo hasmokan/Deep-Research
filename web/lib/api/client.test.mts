@@ -535,6 +535,50 @@ test('streamResearch forwards answer deltas while preserving final result', asyn
   }
 });
 
+test('streamResearch forwards report deltas while preserving final result', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const deltas: string[] = [];
+  const result: ResearchResult = {
+    query: '最新的 react 19 有什么新特性',
+    documents: [],
+    analysis: 'React 19 analysis',
+    report: '# React 19\n\nActions and useOptimistic.',
+    result_type: 'report',
+    status: 'completed',
+  };
+
+  globalThis.fetch = async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: custom\ndata: {"type":"report_delta","data":{"delta":"# React 19\\n\\n"}}\n\n'));
+        controller.enqueue(encoder.encode('event: custom\ndata: {"type":"report_delta","data":{"delta":"Actions and useOptimistic."}}\n\n'));
+        controller.enqueue(encoder.encode(`event: values\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode('event: end\ndata: null\n\n'));
+        controller.close();
+      },
+    });
+
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    const streamedResult = await client.streamResearch(
+      { query: '最新的 react 19 有什么新特性' },
+      { onReportDelta: (delta) => deltas.push(delta) },
+    );
+
+    assert.deepEqual(deltas, ['# React 19\n\n', 'Actions and useOptimistic.']);
+    assert.deepEqual(streamedResult, result);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('streamResearch forwards token usage updates and returns final usage', async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();

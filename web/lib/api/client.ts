@@ -39,6 +39,7 @@ type ResearchStreamHandlerKey =
   | 'onThinking'
   | 'onAnalysis'
   | 'onReport'
+  | 'onReportDelta'
   | 'onAnswerDelta'
   | 'onAnswer'
   | 'onTokenUsage';
@@ -583,6 +584,10 @@ export class ApiClient {
     } else if (type === 'report') {
       handlers.onReport?.(
         (typeof dataRecord.report === 'string' ? dataRecord.report : null) as HandlerPayload<'onReport'>,
+      );
+    } else if (type === 'report_delta') {
+      handlers.onReportDelta?.(
+        (typeof dataRecord.delta === 'string' ? dataRecord.delta : '') as HandlerPayload<'onReportDelta'>,
       );
     } else if (type === 'answer_delta') {
       handlers.onAnswerDelta?.(

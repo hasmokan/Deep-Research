@@ -107,6 +107,7 @@ def langgraph_sse_frames(frame: str) -> list[str]:
         "thinking",
         "analysis",
         "report",
+        "report_delta",
         "answer_delta",
         "answer",
         "token_usage",
@@ -394,7 +395,11 @@ def _route_after_streaming_analysis(state: dict[str, Any]) -> str:
     return "end"
 
 
-async def _streaming_answer_coding_node(state: dict[str, Any]) -> dict[str, Any]:
+async def _streaming_answer_coding_node(
+    state: dict[str, Any],
+    *,
+    writer: StreamWriter = lambda _: None,
+) -> dict[str, Any]:
     tracer = get_langfuse_tracer()
     with tracer.start(
         "coding-answer-llm",
@@ -402,7 +407,11 @@ async def _streaming_answer_coding_node(state: dict[str, Any]) -> dict[str, Any]
         input={"query": state.get("display_query") or state.get("query")},
         metadata={"run_id": state.get("run_id")},
     ) as answer_observation:
-        result = await _collect_streaming_node_events(stream_answer_coding_node(state))
+        result = await _collect_streaming_node_events(
+            stream_answer_coding_node(state),
+            writer=writer,
+            node_name="answer_coding",
+        )
         answer_observation.update(
             output={
                 "answer_preview": _text_preview(result.get("answer")),
@@ -412,7 +421,11 @@ async def _streaming_answer_coding_node(state: dict[str, Any]) -> dict[str, Any]
         return _with_latest_result(state, result)
 
 
-async def _streaming_answer_direct_node(state: dict[str, Any]) -> dict[str, Any]:
+async def _streaming_answer_direct_node(
+    state: dict[str, Any],
+    *,
+    writer: StreamWriter = lambda _: None,
+) -> dict[str, Any]:
     tracer = get_langfuse_tracer()
     with tracer.start(
         "direct-answer-llm",
@@ -420,7 +433,11 @@ async def _streaming_answer_direct_node(state: dict[str, Any]) -> dict[str, Any]
         input={"query": state.get("display_query") or state.get("query")},
         metadata={"run_id": state.get("run_id")},
     ) as answer_observation:
-        result = await _collect_streaming_node_events(stream_answer_direct_node(state))
+        result = await _collect_streaming_node_events(
+            stream_answer_direct_node(state),
+            writer=writer,
+            node_name="answer_direct",
+        )
         answer_observation.update(
             output={
                 "answer_preview": _text_preview(result.get("answer")),
@@ -474,7 +491,11 @@ async def _streaming_answer_from_artifact_node(state: dict[str, Any]) -> dict[st
         return _with_latest_result(state, result)
 
 
-async def _streaming_analyze_node(state: dict[str, Any]) -> dict[str, Any]:
+async def _streaming_analyze_node(
+    state: dict[str, Any],
+    *,
+    writer: StreamWriter = lambda _: None,
+) -> dict[str, Any]:
     tracer = get_langfuse_tracer()
     with tracer.start(
         "analyze-llm",
@@ -487,7 +508,11 @@ async def _streaming_analyze_node(state: dict[str, Any]) -> dict[str, Any]:
         },
         metadata={"run_id": state.get("run_id")},
     ) as analyze_observation:
-        result = await _collect_streaming_node_events(stream_analyze_node(state))
+        result = await _collect_streaming_node_events(
+            stream_analyze_node(state),
+            writer=writer,
+            node_name="analyze",
+        )
         analyze_observation.update(
             output={
                 "analysis_preview": _text_preview(result.get("analysis")),
@@ -497,7 +522,11 @@ async def _streaming_analyze_node(state: dict[str, Any]) -> dict[str, Any]:
         return result
 
 
-async def _streaming_generate_node(state: dict[str, Any]) -> dict[str, Any]:
+async def _streaming_generate_node(
+    state: dict[str, Any],
+    *,
+    writer: StreamWriter = lambda _: None,
+) -> dict[str, Any]:
     tracer = get_langfuse_tracer()
     with tracer.start(
         "report-llm",
@@ -509,7 +538,11 @@ async def _streaming_generate_node(state: dict[str, Any]) -> dict[str, Any]:
         },
         metadata={"run_id": state.get("run_id")},
     ) as report_observation:
-        result = await _collect_streaming_node_events(stream_generate_node(state))
+        result = await _collect_streaming_node_events(
+            stream_generate_node(state),
+            writer=writer,
+            node_name="generate",
+        )
         report_observation.update(
             output={
                 "report_preview": _text_preview(result.get("report")),
@@ -519,7 +552,12 @@ async def _streaming_generate_node(state: dict[str, Any]) -> dict[str, Any]:
         return _with_latest_result(state, result)
 
 
-async def _collect_streaming_node_events(stream: Any) -> dict[str, Any]:
+async def _collect_streaming_node_events(
+    stream: Any,
+    *,
+    writer: StreamWriter | None = None,
+    node_name: str | None = None,
+) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     final_state: dict[str, Any] = {}
     token_usage = TokenUsageAccumulator()
@@ -538,6 +576,8 @@ async def _collect_streaming_node_events(stream: Any) -> dict[str, Any]:
             event = {**event, "usage": usage}
 
         events.append(event)
+        if writer and node_name and event.get("type") not in {"final", "token_usage"}:
+            writer({"node": node_name, "event": event})
         if event.get("type") == "final":
             final_state.update(event.get("state") or {})
 
@@ -886,14 +926,20 @@ async def _sse_events_for_custom_graph_stream(
 ) -> AsyncIterator[str]:
     if not isinstance(payload, dict):
         return
-    if payload.get("node") != "answer_react":
+    node_name = payload.get("node")
+    if not isinstance(node_name, str):
         return
 
-    react_event = payload.get("event")
-    if not isinstance(react_event, dict):
+    stream_event = payload.get("event")
+    if not isinstance(stream_event, dict):
         return
 
-    async for event in _emit_react_runtime_event(react_event, state, record_event):
+    if node_name == "answer_react":
+        async for event in _emit_react_runtime_event(stream_event, state, record_event):
+            yield event
+        return
+
+    async for event in _emit_collected_stream_event(stream_event, record_event, state, node_name=node_name):
         yield event
 
 
@@ -990,7 +1036,12 @@ async def _sse_events_for_graph_update(
         return
 
     if node_name == "analyze":
-        async for event in _emit_collected_stream_events(state.get("stream_events", []), record_event, state):
+        async for event in _emit_collected_stream_events(
+            state.get("stream_events", []),
+            record_event,
+            state,
+            node_name="analyze",
+        ):
             yield event
         yield record_event("analysis", {"analysis": state.get("analysis")})
         await asyncio.sleep(0)
@@ -1018,7 +1069,12 @@ async def _sse_events_for_graph_update(
         return
 
     if node_name == "generate":
-        async for event in _emit_collected_stream_events(state.get("stream_events", []), record_event, state):
+        async for event in _emit_collected_stream_events(
+            state.get("stream_events", []),
+            record_event,
+            state,
+            node_name="generate",
+        ):
             yield event
         yield record_event("report", {"report": state.get("report")})
         await asyncio.sleep(0)
@@ -1027,7 +1083,12 @@ async def _sse_events_for_graph_update(
         return
 
     if node_name in {"answer_coding", "answer_direct"}:
-        async for event in _emit_collected_stream_events(state.get("stream_events", []), record_event, state):
+        async for event in _emit_collected_stream_events(
+            state.get("stream_events", []),
+            record_event,
+            state,
+            node_name=node_name,
+        ):
             yield event
         yield record_event("answer", {"answer": state.get("answer")})
         await asyncio.sleep(0)
@@ -1197,48 +1258,68 @@ async def _emit_collected_stream_events(
     events: list[dict[str, Any]],
     record_event: Any,
     state: dict[str, Any] | None = None,
+    *,
+    node_name: str | None = None,
 ) -> AsyncIterator[str]:
-    token_usage_base = normalize_token_usage(state.get("_token_usage_before_update") if state else None)
     for event in events:
-        if not isinstance(event, dict):
-            continue
+        async for sse_event in _emit_collected_stream_event(event, record_event, state, node_name=node_name):
+            yield sse_event
 
-        event_type = event.get("type")
-        if event_type == "token_usage":
-            token_usage = add_token_usage(token_usage_base, normalize_token_usage(event.get("usage")))
-            if state is not None:
-                state["_token_usage_streamed_for_update"] = True
-            yield record_event("token_usage", token_usage)
-            await asyncio.sleep(0)
-        elif event_type == "answer_delta":
-            yield record_event("answer_delta", {"delta": event.get("delta") or ""})
-            await asyncio.sleep(0)
-        elif event_type == "trace":
-            yield record_event(
-                "trace",
-                _trace_event(
-                    event.get("stage") or "coding",
-                    event.get("kind") or "tool_call",
-                    event.get("title") or "Sandbox tool",
-                    event.get("detail") or "",
-                    **{
-                        key: value
-                        for key, value in event.items()
-                        if key
-                        not in {
-                            "type",
-                            "stage",
-                            "kind",
-                            "title",
-                            "detail",
-                        }
-                    },
-                ),
-            )
-            await asyncio.sleep(0)
-        elif event_type in {"thinking", "draft"}:
-            yield record_event("thinking", _thinking_payload(event))
-            await asyncio.sleep(0)
+
+async def _emit_collected_stream_event(
+    event: dict[str, Any],
+    record_event: Any,
+    state: dict[str, Any] | None = None,
+    *,
+    node_name: str | None = None,
+) -> AsyncIterator[str]:
+    if not isinstance(event, dict):
+        return
+    if node_name and state is not None and not _mark_stream_event(state, node_name, event):
+        if event.get("type") == "token_usage":
+            state["_token_usage_streamed_for_update"] = True
+        return
+
+    token_usage_base = normalize_token_usage(state.get("_token_usage_before_update") if state else None)
+    event_type = event.get("type")
+    if event_type == "token_usage":
+        token_usage = add_token_usage(token_usage_base, normalize_token_usage(event.get("usage")))
+        if state is not None:
+            state["_token_usage_streamed_for_update"] = True
+        yield record_event("token_usage", token_usage)
+        await asyncio.sleep(0)
+    elif event_type == "answer_delta":
+        yield record_event("answer_delta", {"delta": event.get("delta") or ""})
+        await asyncio.sleep(0)
+    elif event_type == "report_delta":
+        yield record_event("report_delta", {"delta": event.get("delta") or ""})
+        await asyncio.sleep(0)
+    elif event_type == "trace":
+        yield record_event(
+            "trace",
+            _trace_event(
+                event.get("stage") or "coding",
+                event.get("kind") or "tool_call",
+                event.get("title") or "Sandbox tool",
+                event.get("detail") or "",
+                **{
+                    key: value
+                    for key, value in event.items()
+                    if key
+                    not in {
+                        "type",
+                        "stage",
+                        "kind",
+                        "title",
+                        "detail",
+                    }
+                },
+            ),
+        )
+        await asyncio.sleep(0)
+    elif event_type in {"thinking", "draft"}:
+        yield record_event("thinking", _thinking_payload(event))
+        await asyncio.sleep(0)
 
 
 async def _emit_react_stream_events(
@@ -1338,8 +1419,12 @@ async def _emit_react_runtime_event(
 
 
 def _mark_react_stream_event(state: dict[str, Any], event: dict[str, Any]) -> bool:
-    key = _react_stream_event_key(event)
-    streamed_keys = state.setdefault("_react_streamed_event_keys", set())
+    return _mark_stream_event(state, "answer_react", event)
+
+
+def _mark_stream_event(state: dict[str, Any], node_name: str, event: dict[str, Any]) -> bool:
+    key = f"{node_name}:{_stream_event_key(event)}"
+    streamed_keys = state.setdefault("_streamed_event_keys", set())
     if key in streamed_keys:
         return False
     streamed_keys.add(key)
@@ -1347,6 +1432,10 @@ def _mark_react_stream_event(state: dict[str, Any], event: dict[str, Any]) -> bo
 
 
 def _react_stream_event_key(event: dict[str, Any]) -> str:
+    return _stream_event_key(event)
+
+
+def _stream_event_key(event: dict[str, Any]) -> str:
     try:
         return json.dumps(event, sort_keys=True, ensure_ascii=False, default=str)
     except TypeError:

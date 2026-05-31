@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { ResearchWorkspaceViewProps } from '@/components/research/research-workspace-view';
 import { apiClient } from '@/lib/api';
+import type { Document, ResearchResult, TokenUsage } from '@/lib/api/types';
 import { getSupabaseClient, isSupabaseAuthConfigured, signInWithGoogle } from '@/lib/auth/supabase';
 import {
   appendResearchActivityEstimatedTokenUsage,
@@ -42,6 +43,24 @@ import {
 import type { TokenUsageDirection } from '@/lib/research/token-usage';
 import { useAuthenticatedResearchSessions } from '@/lib/research/use-authenticated-research-sessions';
 import { useResearchStore } from '@/lib/store/research';
+
+function createStreamingReportResult(
+  query: string,
+  report: string,
+  documents: Document[],
+  analysis: string | null,
+  tokenUsage: TokenUsage | null,
+): ResearchResult {
+  return {
+    query,
+    documents,
+    analysis,
+    report,
+    result_type: 'report',
+    token_usage: tokenUsage,
+    status: 'streaming',
+  };
+}
 
 export function useResearchWorkspaceController() {
   const [localQuery, setLocalQuery] = useState('');
@@ -464,8 +483,26 @@ export function useResearchWorkspaceController() {
       setLoading(true);
       clearWorkspaceError();
       setResult(null);
+      setDismissedSidebarQuery(null);
       resetStream();
       addEstimatedTokenUsage(runSessionId, activityMessage.id, researchQuery, 'input');
+
+      let streamedReport = '';
+      let streamedAnalysis: string | null = null;
+      let streamedDocuments: Document[] = [];
+      let streamedTokenUsage: TokenUsage | null = null;
+      const updateStreamingReportResult = () => {
+        if (!streamedReport.trim()) {
+          return;
+        }
+        setResult(createStreamingReportResult(
+          researchQuery,
+          streamedReport,
+          streamedDocuments,
+          streamedAnalysis,
+          streamedTokenUsage,
+        ));
+      };
 
       const streamHandlers = createResearchStreamHandlers({
         sessionId: runSessionId,
@@ -488,8 +525,16 @@ export function useResearchWorkspaceController() {
             (message) => setResearchActivityRunMetadata(message, metadata),
           );
         },
-        setStreamDocuments,
-        setStreamTokenUsage,
+        setStreamDocuments: (documents) => {
+          streamedDocuments = documents;
+          setStreamDocuments(documents);
+          updateStreamingReportResult();
+        },
+        setStreamTokenUsage: (tokenUsage) => {
+          streamedTokenUsage = tokenUsage;
+          setStreamTokenUsage(tokenUsage);
+          updateStreamingReportResult();
+        },
         updateResearchActivityMessage,
       });
       const researchResult = await apiClient.streamResearch(
@@ -502,6 +547,21 @@ export function useResearchWorkspaceController() {
         },
         {
           ...streamHandlers,
+          onAnalysis: (analysis) => {
+            streamedAnalysis = analysis;
+            updateStreamingReportResult();
+          },
+          onReportDelta: (delta) => {
+            streamHandlers.onReportDelta?.(delta);
+            streamedReport += delta;
+            updateStreamingReportResult();
+          },
+          onReport: (report) => {
+            if (typeof report === 'string') {
+              streamedReport = report;
+              updateStreamingReportResult();
+            }
+          },
           signal: abortController.signal,
         },
       ).catch((streamError) => {

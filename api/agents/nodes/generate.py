@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 from typing import Any
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from core.config import get_settings
 from agents.nodes.reasoning import extract_response_delta_parts, extract_response_parts
 from agents.token_usage import TokenUsageAccumulator, add_token_usage, extract_token_usage, normalize_token_usage
@@ -105,6 +105,10 @@ async def stream_generate_node(state: dict[str, Any]):
 
         if content_delta:
             content_parts.append(content_delta)
+            yield {
+                "type": "report_delta",
+                "delta": content_delta,
+            }
             draft = "".join(content_parts).strip()
             if draft and not thinking_parts:
                 yield {

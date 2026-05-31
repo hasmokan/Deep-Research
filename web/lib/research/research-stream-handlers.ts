@@ -132,6 +132,9 @@ export function createResearchStreamHandlers({
         (message) => appendAssistantAnswerDelta(message, delta),
       );
     },
+    onReportDelta: (delta) => {
+      addEstimatedTokenUsage(sessionId, messageId, delta, 'output');
+    },
     onTokenUsage: (tokenUsage) => {
       setStreamTokenUsage(tokenUsage);
       updateResearchActivityMessage(
