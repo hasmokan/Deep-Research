@@ -109,7 +109,20 @@ export function useAuthenticatedResearchSessions({
 
     const applyAuthSession = async (nextSession: Session | null) => {
       authSessionRef.current = nextSession;
-      apiClient.setAccessTokenProvider(() => authSessionRef.current?.access_token ?? null);
+      apiClient.setAccessTokenProvider(async () => {
+        const currentSession = await getAuthSession();
+        authSessionRef.current = currentSession;
+        return currentSession?.access_token ?? null;
+      });
+      apiClient.setAccessTokenRefreshProvider(async () => {
+        const { data, error } = await getSupabaseClient().auth.refreshSession();
+        if (error) {
+          return null;
+        }
+
+        authSessionRef.current = data.session;
+        return data.session?.access_token ?? null;
+      });
 
       if (cancelled) {
         return;
@@ -174,6 +187,8 @@ export function useAuthenticatedResearchSessions({
     };
 
     if (!isSupabaseAuthConfigured()) {
+      apiClient.setAccessTokenProvider(null);
+      apiClient.setAccessTokenRefreshProvider(null);
       setAuthError('Supabase Google login is not configured');
       setHasLoadedSessions(true);
       return;
@@ -192,6 +207,8 @@ export function useAuthenticatedResearchSessions({
 
     return () => {
       cancelled = true;
+      apiClient.setAccessTokenProvider(null);
+      apiClient.setAccessTokenRefreshProvider(null);
       data.subscription.unsubscribe();
     };
   }, [

@@ -27,6 +27,9 @@ type ResearchStreamEventResult =
   | { type: 'end' }
   | { type: 'error'; message: string };
 
+type MaybePromise<T> = T | Promise<T>;
+type AccessTokenProvider = () => MaybePromise<string | null | undefined>;
+
 type ResearchStreamHandlerKey =
   | 'onMetadata'
   | 'onStatus'
@@ -49,14 +52,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export class ApiClient {
   private baseUrl: string;
-  private accessTokenProvider: (() => string | null | undefined) | null = null;
+  private accessTokenProvider: AccessTokenProvider | null = null;
+  private accessTokenRefreshProvider: AccessTokenProvider | null = null;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
   }
 
-  setAccessTokenProvider(provider: (() => string | null | undefined) | null) {
+  setAccessTokenProvider(provider: AccessTokenProvider | null) {
     this.accessTokenProvider = provider;
+  }
+
+  setAccessTokenRefreshProvider(provider: AccessTokenProvider | null) {
+    this.accessTokenRefreshProvider = provider;
   }
 
   private newRequestId(): string {
@@ -64,7 +72,11 @@ export class ApiClient {
     return `req-${randomId}`;
   }
 
-  private headers(headers?: HeadersInit, requestId: string = this.newRequestId()): Headers {
+  private async headers(
+    headers?: HeadersInit,
+    requestId: string = this.newRequestId(),
+    authorizationToken?: string | null,
+  ): Promise<Headers> {
     const nextHeaders = new Headers(headers);
 
     if (!nextHeaders.has('Content-Type')) {
@@ -75,12 +87,49 @@ export class ApiClient {
       nextHeaders.set('X-Request-ID', requestId);
     }
 
-    const token = this.accessTokenProvider?.();
-    if (token && !nextHeaders.has('Authorization')) {
+    const token = authorizationToken === undefined
+      ? await this.accessTokenProvider?.()
+      : authorizationToken;
+    if (token && (authorizationToken !== undefined || !nextHeaders.has('Authorization'))) {
       nextHeaders.set('Authorization', `Bearer ${token}`);
     }
 
     return nextHeaders;
+  }
+
+  private async refreshAccessToken(): Promise<string | null> {
+    if (!this.accessTokenRefreshProvider) {
+      return null;
+    }
+
+    try {
+      return await this.accessTokenRefreshProvider() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchWithAuthRetry(
+    url: string,
+    init: RequestInit,
+    requestId: string,
+  ): Promise<Response> {
+    const send = async (authorizationToken?: string | null) => fetch(url, {
+      ...init,
+      headers: await this.headers(init.headers, requestId, authorizationToken),
+    });
+
+    const response = await send();
+    if (response.status !== 401) {
+      return response;
+    }
+
+    const refreshedToken = await this.refreshAccessToken();
+    if (!refreshedToken) {
+      return response;
+    }
+
+    return send(refreshedToken);
   }
 
   private async request<T>(
@@ -91,10 +140,7 @@ export class ApiClient {
     const requestId = this.newRequestId();
 
     try {
-      const response = await fetch(url, {
-        ...options,
-        headers: this.headers(options?.headers, requestId),
-      });
+      const response = await this.fetchWithAuthRetry(url, options ?? {}, requestId);
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({
@@ -127,11 +173,10 @@ export class ApiClient {
       ...request,
     };
 
-    await fetch(`${this.baseUrl}/api/diagnostics/client-error`, {
+    await this.fetchWithAuthRetry(`${this.baseUrl}/api/diagnostics/client-error`, {
       method: 'POST',
-      headers: this.headers(undefined, requestId),
       body: JSON.stringify(payload),
-    }).catch(() => undefined);
+    }, requestId).catch(() => undefined);
   }
 
   private reportApiFailure(
@@ -191,12 +236,11 @@ export class ApiClient {
     handlers: ResearchPlanStreamHandlers = {}
   ): Promise<ResearchPlanResponse> {
     const requestId = this.newRequestId();
-    const response = await fetch(`${this.baseUrl}/api/research/plan/stream`, {
+    const response = await this.fetchWithAuthRetry(`${this.baseUrl}/api/research/plan/stream`, {
       method: 'POST',
-      headers: this.headers(undefined, requestId),
       body: JSON.stringify(request),
       signal: handlers.signal,
-    });
+    }, requestId);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({
@@ -248,13 +292,13 @@ export class ApiClient {
       params.set('after_seq', String(handlers.afterSeq));
     }
     const queryString = params.toString();
-    const response = await fetch(
+    const response = await this.fetchWithAuthRetry(
       `${this.baseUrl}/api/research/runs/${encodeURIComponent(runId)}/stream${queryString ? `?${queryString}` : ''}`,
       {
         method: 'GET',
-        headers: this.headers(undefined, requestId),
         signal: handlers.signal,
       },
+      requestId,
     );
 
     if (!response.ok) {
@@ -330,12 +374,11 @@ export class ApiClient {
     handlers: ResearchStreamHandlers = {}
   ): Promise<ResearchResult> {
     const requestId = this.newRequestId();
-    const response = await fetch(`${this.baseUrl}/api/research/stream`, {
+    const response = await this.fetchWithAuthRetry(`${this.baseUrl}/api/research/stream`, {
       method: 'POST',
-      headers: this.headers(undefined, requestId),
       body: JSON.stringify(request),
       signal: handlers.signal,
-    });
+    }, requestId);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({

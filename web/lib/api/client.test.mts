@@ -91,6 +91,60 @@ test('request methods send the current bearer token', async () => {
   }
 });
 
+test('request methods await the latest bearer token before sending', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, 'http://api.test/api/research/threads');
+    assert.equal(init?.headers && new Headers(init.headers).get('Authorization'), 'Bearer fresh-token');
+
+    return Response.json([]);
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    client.setAccessTokenProvider(async () => 'fresh-token');
+
+    await client.listResearchThreads();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('request methods refresh an invalid token and retry once', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+
+  globalThis.fetch = async (url, init) => {
+    calls.push(`${String(url)} ${init?.headers && new Headers(init.headers).get('Authorization')}`);
+
+    if (calls.length === 1) {
+      return Response.json({ detail: 'Invalid authentication token' }, { status: 401 });
+    }
+
+    return Response.json([]);
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    let token = 'expired-token';
+    client.setAccessTokenProvider(() => token);
+    client.setAccessTokenRefreshProvider(async () => {
+      token = 'fresh-token';
+      return token;
+    });
+
+    await client.listResearchThreads();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(calls, [
+    'http://api.test/api/research/threads Bearer expired-token',
+    'http://api.test/api/research/threads Bearer fresh-token',
+  ]);
+});
+
 test('request methods attach a request id header', async () => {
   const originalFetch = globalThis.fetch;
 
@@ -261,6 +315,62 @@ test('stream methods send the current bearer token', async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('streamResearch refreshes an invalid token before retrying the stream request', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const calls: string[] = [];
+  const result: ResearchResult = {
+    query: 'test query',
+    documents: [],
+    analysis: null,
+    report: '# Report',
+    result_type: 'report',
+    status: 'completed',
+  };
+
+  globalThis.fetch = async (url, init) => {
+    calls.push(`${String(url)} ${init?.headers && new Headers(init.headers).get('Authorization')}`);
+
+    if (calls.length === 1) {
+      return Response.json({ detail: 'Invalid authentication token' }, { status: 401 });
+    }
+
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: values\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.enqueue(encoder.encode('event: end\ndata: null\n\n'));
+        controller.close();
+      },
+    });
+
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const client = new ApiClient('http://api.test');
+    let token = 'expired-token';
+    client.setAccessTokenProvider(() => token);
+    client.setAccessTokenRefreshProvider(async () => {
+      token = 'fresh-token';
+      return token;
+    });
+
+    const streamedResult = await client.streamResearch({ query: 'test query' });
+
+    assert.deepEqual(streamedResult, result);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(calls, [
+    'http://api.test/api/research/stream Bearer expired-token',
+    'http://api.test/api/research/stream Bearer fresh-token',
+  ]);
 });
 
 test('streamResearchRun reconnects to a persisted run event stream', async () => {
