@@ -7,6 +7,8 @@ services:
     environment:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       RESEARCH_STORAGE_BACKEND: ${RESEARCH_STORAGE_BACKEND:-json}
+      RESEARCH_QUEUE_BACKEND: ${RESEARCH_QUEUE_BACKEND:-redis}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       WATCHFILES_FORCE_POLLING: ${WATCHFILES_FORCE_POLLING:-true}
 
   web:
@@ -33,6 +35,7 @@ services:
     restart: "no"
 
 volumes:
+  redis-data:
   web-node-modules:
   web-next-cache:
   web-pnpm-store:

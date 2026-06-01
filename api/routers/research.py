@@ -11,6 +11,7 @@ from services.auth import AuthenticatedUser, get_current_user
 from services.research_memories import build_memory_context, research_memory_store
 from services.research_runs import research_run_store
 from services.research_threads import research_thread_store
+from services.message_queue import MemoryResearchJobQueue, QueuedResearchRunJob, RedisResearchJobQueue, ResearchRunJob, create_research_job_queue
 from services.request_tracing import current_request_id, log_event, reset_request_id, set_request_id
 from services.vector_store import get_vector_store
 from datetime import datetime
@@ -21,6 +22,8 @@ import uuid
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 _background_research_tasks: set[asyncio.Task] = set()
+research_job_queue = create_research_job_queue()
+_research_job_worker_task: asyncio.Task | None = None
 
 
 def _is_terminal_run_status(status: str | None) -> bool:
@@ -272,6 +275,80 @@ async def _run_research_to_store(
             reset_request_id(token)
 
 
+async def _run_queued_research_job(queued: QueuedResearchRunJob) -> None:
+    job = queued.job
+    try:
+        await _run_research_to_store(
+            job.contextual_query,
+            run_id=job.run_id,
+            user_id=job.user_id,
+            thread_id=job.thread_id,
+            trace_id=job.trace_id,
+            display_query=job.display_query,
+            latest_result=job.latest_result,
+            execution_mode=job.execution_mode,
+        )
+    finally:
+        await research_job_queue.ack(queued)
+
+
+async def _research_job_worker_loop() -> None:
+    await research_job_queue.start()
+    while True:
+        queued = await research_job_queue.receive()
+        await _run_queued_research_job(queued)
+
+
+def ensure_research_job_worker_started() -> asyncio.Task | None:
+    """Start the shared Redis queue worker when Redis queueing is enabled."""
+    global _research_job_worker_task
+    if not isinstance(research_job_queue, RedisResearchJobQueue):
+        return None
+    if _research_job_worker_task is not None and not _research_job_worker_task.done():
+        return _research_job_worker_task
+    _research_job_worker_task = asyncio.create_task(_research_job_worker_loop())
+    return _research_job_worker_task
+
+
+async def stop_research_job_worker() -> None:
+    global _research_job_worker_task
+    if _research_job_worker_task is not None:
+        _research_job_worker_task.cancel()
+        try:
+            await _research_job_worker_task
+        except asyncio.CancelledError:
+            pass
+        _research_job_worker_task = None
+    await research_job_queue.close()
+
+
+async def _enqueue_research_job(job: ResearchRunJob) -> None:
+    try:
+        await research_job_queue.send(job)
+    except Exception as exc:
+        research_run_store.append_event(
+            job.run_id,
+            "stream_error",
+            {"detail": f"Research queue enqueue failed: {exc}", "trace_id": job.trace_id},
+        )
+        log_event(
+            "research_run_enqueue_failed",
+            level=logging.ERROR,
+            run_id=job.run_id,
+            user_id=job.user_id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return
+
+    # Memory queue preserves the historical in-process background-task behavior.
+    # Redis queue jobs are consumed by the shared worker, which can run in this
+    # process or another API worker/container.
+    if isinstance(research_job_queue, MemoryResearchJobQueue):
+        queued = await research_job_queue.receive()
+        await _run_queued_research_job(queued)
+
+
 def start_research_run_background(
     contextual_query: str,
     *,
@@ -284,18 +361,18 @@ def start_research_run_background(
     execution_mode: str = "auto",
 ) -> asyncio.Task:
     trace_id = trace_id or current_request_id()
-    task = asyncio.create_task(
-        _run_research_to_store(
-            contextual_query,
-            run_id=run_id,
-            user_id=user_id,
-            thread_id=thread_id,
-            trace_id=trace_id,
-            display_query=display_query,
-            latest_result=latest_result,
-            execution_mode=execution_mode,
-        )
+    ensure_research_job_worker_started()
+    job = ResearchRunJob(
+        contextual_query=contextual_query,
+        run_id=run_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        trace_id=trace_id,
+        display_query=display_query,
+        latest_result=latest_result,
+        execution_mode=execution_mode,
     )
+    task = asyncio.create_task(_enqueue_research_job(job))
     _background_research_tasks.add(task)
     task.add_done_callback(_background_research_tasks.discard)
     return task

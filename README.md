@@ -134,6 +134,15 @@ LANGGRAPH_CHECKPOINT_SETUP=true
 
 这里需要 Supabase 的 Postgres 直连或 Session Pooler 连接串，不是 `SUPABASE_URL` REST API。不要优先使用 Transaction Pooler，除非确认底层驱动已关闭 prepared statements。
 
+研究任务默认使用进程内 memory 队列。Docker Compose 默认启用 Redis Streams；本地直接运行后端时，如果要让多个 API worker 共享研究任务，也可以切到 Redis：
+
+```env
+RESEARCH_QUEUE_BACKEND=redis
+REDIS_URL=redis://redis:6379/0
+RESEARCH_QUEUE_STREAM=deep-research:jobs
+RESEARCH_QUEUE_GROUP=deep-research-workers
+```
+
 启动后端：
 
 ```bash

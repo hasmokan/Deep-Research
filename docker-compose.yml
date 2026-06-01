@@ -7,11 +7,22 @@ services:
     environment:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       RESEARCH_STORAGE_BACKEND: ${RESEARCH_STORAGE_BACKEND:-json}
+      RESEARCH_QUEUE_BACKEND: ${RESEARCH_QUEUE_BACKEND:-redis}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - api-data:/app/data
+    depends_on:
+      redis:
+        condition: service_started
     restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
 
   web:
     build:
@@ -35,3 +46,4 @@ services:
 
 volumes:
   api-data:
+  redis-data:

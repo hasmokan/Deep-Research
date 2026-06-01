@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     langgraph_checkpoint_backend: str = "memory"
     langgraph_checkpoint_postgres_url: Optional[str] = None
     langgraph_checkpoint_setup: bool = True
+    research_queue_backend: str = "memory"
+    redis_url: Optional[str] = None
+    research_queue_stream: str = "deep-research:jobs"
+    research_queue_group: str = "deep-research-workers"
+    research_queue_consumer: Optional[str] = None
 
     # Langfuse observability
     langfuse_enabled: bool = False

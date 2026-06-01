@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -9,10 +11,24 @@ from routers import diagnostics, research, skills
 from services.langfuse_observability import get_langfuse_tracer
 from services.request_tracing import RequestTracingMiddleware, configure_logging
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    from routers.research import ensure_research_job_worker_started, stop_research_job_worker
+
+    ensure_research_job_worker_started()
+    try:
+        yield
+    finally:
+        await stop_research_job_worker()
+        get_langfuse_tracer().shutdown()
+
+
 app = FastAPI(
     title="Deep Research API",
     description="AI-powered deep research tool with intelligent search and report generation",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 configure_logging()
@@ -49,10 +65,6 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-
-@app.on_event("shutdown")
-def shutdown_observability():
-    get_langfuse_tracer().shutdown()
 
 if __name__ == "__main__":
     import uvicorn
