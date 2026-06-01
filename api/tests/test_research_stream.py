@@ -685,6 +685,78 @@ class ResearchStreamTests(TestCase):
         self.assertEqual(values_payload["result_type"], "answer")
         self.assertEqual(values_payload["status"], "completed")
 
+    def test_react_mode_streams_final_answer_as_answer_delta_before_values(self):
+        from agents import research_stream
+
+        async def fake_react_messages(query):
+            yield {
+                "type": "final",
+                "answer": "Here is the sourced answer.",
+            }
+
+        with (
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                return_value={"intent": "new_research", "reason": "test"},
+            ),
+            patch.object(research_stream, "stream_react_agent_messages", fake_react_messages),
+        ):
+            events = asyncio.run(
+                _collect_stream_events(
+                    research_stream.stream_research_events(
+                        "test query",
+                        execution_mode="react",
+                    )
+                )
+            )
+
+        answer_delta_payloads = _custom_payloads(events, "answer_delta")
+        values_index = next(index for index, event in enumerate(events) if event.startswith("event: values"))
+        answer_delta_index = next(
+            index
+            for index, event in enumerate(events)
+            if event.startswith("event: custom") and '"type":"answer_delta"' in event
+        )
+
+        self.assertLess(answer_delta_index, values_index)
+        self.assertEqual(answer_delta_payloads, [{"delta": "Here is the sourced answer."}])
+        self.assertEqual(_payloads(events, "values")[0]["answer"], "Here is the sourced answer.")
+
+    def test_react_mode_splits_long_final_answer_into_multiple_answer_deltas(self):
+        from agents import research_stream
+
+        long_answer = " ".join(["React 19 useOptimistic detail."] * 30)
+
+        async def fake_react_messages(query):
+            yield {
+                "type": "final",
+                "answer": long_answer,
+            }
+
+        with (
+            patch.object(
+                research_stream,
+                "classify_research_intent_node",
+                return_value={"intent": "new_research", "reason": "test"},
+            ),
+            patch.object(research_stream, "stream_react_agent_messages", fake_react_messages),
+        ):
+            events = asyncio.run(
+                _collect_stream_events(
+                    research_stream.stream_research_events(
+                        "test query",
+                        execution_mode="react",
+                    )
+                )
+            )
+
+        answer_delta_payloads = _custom_payloads(events, "answer_delta")
+
+        self.assertGreater(len(answer_delta_payloads), 1)
+        self.assertEqual("".join(payload["delta"] for payload in answer_delta_payloads), long_answer)
+        self.assertEqual(_payloads(events, "values")[0]["answer"], long_answer.strip())
+
     def test_sandbox_trace_details_include_action_parameters(self):
         from agents.nodes.conversation_router import (
             _sandbox_tool_call_detail,

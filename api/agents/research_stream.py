@@ -34,6 +34,7 @@ _streaming_research_graph_override: Any | None = None
 _streaming_research_checkpointer = create_langgraph_checkpointer()
 
 _ROOT_AGENT_KEY = "research"
+_ANSWER_DELTA_CHUNK_CHARS = 240
 _AGENT_CONTEXT_BY_STAGE = {
     "route": ("router", "Router Agent"),
     "react": ("react-worker", "ReAct Worker"),
@@ -1397,7 +1398,8 @@ async def _emit_react_runtime_event(
                     "report_completed": True,
                 }
             )
-            yield record_event("answer", {"answer": question})
+            async for event in _emit_answer_delta_chunks(question, record_event):
+                yield event
             state["_react_answer_emitted"] = True
             await asyncio.sleep(0)
         return
@@ -1413,9 +1415,53 @@ async def _emit_react_runtime_event(
                 }
             )
             if not state.get("_react_answer_emitted"):
-                yield record_event("answer", {"answer": answer})
+                async for event in _emit_answer_delta_chunks(answer, record_event):
+                    yield event
                 state["_react_answer_emitted"] = True
                 await asyncio.sleep(0)
+
+
+async def _emit_answer_delta_chunks(
+    answer: str,
+    record_event: Any,
+    *,
+    chunk_chars: int = _ANSWER_DELTA_CHUNK_CHARS,
+) -> AsyncIterator[str]:
+    for delta in _answer_delta_chunks(answer, chunk_chars=chunk_chars):
+        yield record_event("answer_delta", {"delta": delta})
+        await asyncio.sleep(0)
+
+
+def _answer_delta_chunks(answer: str, *, chunk_chars: int = _ANSWER_DELTA_CHUNK_CHARS) -> list[str]:
+    if len(answer) <= chunk_chars:
+        return [answer]
+
+    chunks: list[str] = []
+    cursor = 0
+    while cursor < len(answer):
+        next_cursor = min(cursor + chunk_chars, len(answer))
+        split_at = _chunk_split_index(answer, cursor, next_cursor)
+        chunks.append(answer[cursor:split_at])
+        cursor = split_at
+
+    return chunks
+
+
+def _chunk_split_index(answer: str, cursor: int, next_cursor: int) -> int:
+    if next_cursor >= len(answer):
+        return len(answer)
+
+    split_at = max(
+        answer.rfind("\n", cursor + 1, next_cursor),
+        answer.rfind("。", cursor + 1, next_cursor),
+        answer.rfind(". ", cursor + 1, next_cursor),
+        answer.rfind(" ", cursor + 1, next_cursor),
+    )
+    if split_at <= cursor:
+        return next_cursor
+    if answer[split_at:split_at + 2] == ". ":
+        return split_at + 2
+    return split_at + 1
 
 
 def _mark_react_stream_event(state: dict[str, Any], event: dict[str, Any]) -> bool:
