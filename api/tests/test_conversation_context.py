@@ -71,6 +71,29 @@ class ConversationContextTests(TestCase):
         self.assertNotIn("Recent research topics", contextual_query)
         self.assertIn("Current user request:\n谁是hasmokan", contextual_query)
 
+    def test_contextual_query_compacts_long_history_into_continuity_summary(self):
+        from agents.conversation_context import build_contextual_research_query
+
+        contextual_query = build_contextual_research_query(
+            "继续实现",
+            [
+                {"role": "user", "content": "Initial goal: implement s06 context compression."},
+                {"role": "assistant", "content": "Old verbose output " + "x" * 300},
+                {"role": "user", "content": "Touched api/agents/conversation_context.py."},
+                {"role": "assistant", "content": "Decision: active context compression is not long-term memory."},
+                {"role": "user", "content": "继续实现"},
+            ],
+            max_messages=2,
+            max_context_chars=160,
+        )
+
+        self.assertIn("Context continuity summary", contextual_query)
+        self.assertIn("Initial goal: implement s06 context compression", contextual_query)
+        self.assertIn("api/agents/conversation_context.py", contextual_query)
+        self.assertIn("assistant: Decision: active context compression", contextual_query)
+        self.assertNotIn("Old verbose output", contextual_query)
+        self.assertIn("Current user request:\n继续实现", contextual_query)
+
 
 class ConversationResearchRouteTests(TestCase):
     def setUp(self):

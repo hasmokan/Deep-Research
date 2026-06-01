@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from agents.context_compression import compact_conversation_history
+
 VALID_ROLES = {"user", "assistant"}
 
 
@@ -29,15 +31,21 @@ def build_contextual_research_query(
 
     del memory_context, max_memory_chars
 
-    recent_history = history[-max_messages:]
-    context_lines = [
+    recent_history, compact_state = compact_conversation_history(
+        history,
+        max_messages=max_messages,
+        max_context_chars=max_context_chars,
+    )
+    recent_context = "\n".join(
         f"{message['role']}: {message['content']}"
         for message in recent_history
-    ]
-    context = "\n".join(context_lines)
-
-    if len(context) > max_context_chars:
-        context = f"...{context[-max_context_chars:].strip()}"
+    )
+    context_parts = []
+    if compact_state.last_summary:
+        context_parts.append(compact_state.last_summary)
+    if recent_context:
+        context_parts.append(recent_context)
+    context = "\n\n".join(context_parts)
 
     return (
         "Use the previous conversation context only when it is necessary to resolve references, follow-up wording, "

@@ -1,5 +1,7 @@
 """Minimal ReAct agent loop behavior."""
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch
@@ -113,6 +115,78 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
         self.assertEqual(events[2]["message"]["content"], "hasmokan appears to be a GitHub user.")
         self.assertEqual(events[3]["answer"], "hasmokan appears to be a GitHub user.")
 
+    async def test_persists_large_tool_result_before_model_observes_it(self):
+        from langchain_core.messages import ToolMessage
+
+        from agents import react_agent
+        from agents.context_compression import persist_large_output
+
+        class FakeModel:
+            def __init__(self):
+                self.calls = 0
+                self.invocations = []
+
+            async def ainvoke(self, messages, config=None):
+                self.invocations.append(list(messages))
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(
+                        id="ai-search",
+                        content="",
+                        additional_kwargs={},
+                        tool_calls=[
+                            {
+                                "id": "call-large-search",
+                                "name": "web_search",
+                                "args": {"query": "large result"},
+                            }
+                        ],
+                    )
+                return SimpleNamespace(
+                    id="ai-final",
+                    content="Used persisted output marker.",
+                    additional_kwargs={},
+                    tool_calls=[],
+                )
+
+        async def fake_tool_runner(name, args):
+            return "abcdefghijklmnopqrstuvwxyz"
+
+        with TemporaryDirectory() as temp_dir:
+            def persist_for_test(tool_use_id, output):
+                return persist_large_output(
+                    tool_use_id,
+                    output,
+                    output_dir=Path(temp_dir),
+                    threshold=10,
+                    preview_chars=8,
+                )
+
+            model = FakeModel()
+            with patch.object(react_agent, "persist_large_output", persist_for_test):
+                events = [
+                    event
+                    async for event in react_agent.stream_react_agent_messages(
+                        "Find large result",
+                        model=model,
+                        tool_runner=fake_tool_runner,
+                    )
+                ]
+
+            tool_event = events[1]["message"]["content"]
+            observed_tool_messages = [
+                message for message in model.invocations[1] if isinstance(message, ToolMessage)
+            ]
+
+            self.assertIn("<persisted-output>", tool_event)
+            self.assertIn("Preview:\nabcdefgh", tool_event)
+            self.assertNotIn("ijklmnopqrstuvwxyz", tool_event)
+            self.assertIn("<persisted-output>", observed_tool_messages[0].content)
+
+            saved_path = Path(tool_event.split("Full output saved to: ", 1)[1].splitlines()[0])
+            self.assertEqual(saved_path.read_text(encoding="utf-8"), "abcdefghijklmnopqrstuvwxyz")
+            self.assertEqual(events[-1]["answer"], "Used persisted output marker.")
+
     async def test_stops_for_clarification_tool_call(self):
         from agents.react_agent import stream_react_agent_messages
 
@@ -203,6 +277,62 @@ class ReactAgentTests(IsolatedAsyncioTestCase):
         self.assertNotEqual(events[-1]["answer"], internal_fallback)
         self.assertEqual(model.calls, 3)
         self.assertIn("stop calling tools", model.invocations[-1][-1].content.lower())
+
+    async def test_final_synthesis_micro_compacts_older_tool_results(self):
+        from langchain_core.messages import ToolMessage
+
+        from agents.react_agent import stream_react_agent_messages
+
+        class FakeModel:
+            def __init__(self):
+                self.calls = 0
+                self.invocations = []
+
+            async def ainvoke(self, messages, config=None):
+                self.invocations.append(list(messages))
+                self.calls += 1
+                if self.calls <= 4:
+                    return SimpleNamespace(
+                        id=f"ai-{self.calls}",
+                        content="",
+                        additional_kwargs={},
+                        tool_calls=[
+                            {
+                                "id": f"call-{self.calls}",
+                                "name": "web_search",
+                                "args": {"query": f"source {self.calls}"},
+                            }
+                        ],
+                    )
+                return SimpleNamespace(
+                    id="ai-synthesis",
+                    content="Final answer from compacted evidence.",
+                    additional_kwargs={},
+                    tool_calls=[],
+                )
+
+        async def fake_tool_runner(name, args):
+            return [{"title": f"Result {args['query']}", "url": f"https://example.test/{args['query']}"}]
+
+        model = FakeModel()
+        events = [
+            event
+            async for event in stream_react_agent_messages(
+                "Gather enough sources",
+                model=model,
+                tool_runner=fake_tool_runner,
+                max_rounds=4,
+            )
+        ]
+
+        synthesis_tool_messages = [
+            message for message in model.invocations[-1] if isinstance(message, ToolMessage)
+        ]
+        self.assertEqual(synthesis_tool_messages[0].content, "[Earlier tool result omitted for brevity]")
+        self.assertIn("Result source 2", synthesis_tool_messages[1].content)
+        self.assertIn("Result source 3", synthesis_tool_messages[2].content)
+        self.assertIn("Result source 4", synthesis_tool_messages[3].content)
+        self.assertEqual(events[-1]["answer"], "Final answer from compacted evidence.")
 
     async def test_runtime_carries_repeated_tool_observations_between_model_calls(self):
         from langchain_core.messages import ToolMessage

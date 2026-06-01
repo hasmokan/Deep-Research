@@ -14,6 +14,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 
+from agents.context_compression import micro_compact_tool_messages, persist_large_output
 from agents.nodes.reasoning import extract_response_parts
 from agents.nodes.web_search import web_search_node
 from agents.token_usage import extract_token_usage
@@ -93,7 +94,10 @@ async def stream_react_agent_messages(
                         ai_message = _serialize_ai_message(message)
                         tool_calls = ai_message.get("tool_calls") or []
                         if tool_calls and tool_rounds_used >= max_rounds:
-                            async for event in _synthesize_final_answer(runnable_model, messages_for_fallback):
+                            async for event in _synthesize_final_answer(
+                                runnable_model,
+                                _compact_fallback_messages(messages_for_fallback),
+                            ):
                                 yield event
                             return
 
@@ -132,7 +136,10 @@ async def stream_react_agent_messages(
                             if pending_tool_results:
                                 pending_tool_results -= 1
                             if pending_tool_results == 0 and tool_rounds_used >= max_rounds:
-                                async for event in _synthesize_final_answer(runnable_model, messages_for_fallback):
+                                async for event in _synthesize_final_answer(
+                                    runnable_model,
+                                    _compact_fallback_messages(messages_for_fallback),
+                                ):
                                     yield event
                                 return
                             continue
@@ -152,15 +159,24 @@ async def stream_react_agent_messages(
                         if pending_tool_results:
                             pending_tool_results -= 1
                         if pending_tool_results == 0 and tool_rounds_used >= max_rounds:
-                            async for event in _synthesize_final_answer(runnable_model, messages_for_fallback):
+                            async for event in _synthesize_final_answer(
+                                runnable_model,
+                                _compact_fallback_messages(messages_for_fallback),
+                            ):
                                 yield event
                             return
     except GraphRecursionError:
-        async for event in _synthesize_final_answer(runnable_model, messages_for_fallback):
+        async for event in _synthesize_final_answer(
+            runnable_model,
+            _compact_fallback_messages(messages_for_fallback),
+        ):
             yield event
         return
 
-    yield {"type": "final", "answer": _partial_answer_fallback(messages_for_fallback)}
+    yield {
+        "type": "final",
+        "answer": _partial_answer_fallback(_compact_fallback_messages(messages_for_fallback)),
+    }
 
 
 async def _synthesize_final_answer(model: Any, messages: list[Any]) -> AsyncIterator[dict[str, Any]]:
@@ -199,6 +215,10 @@ def build_react_system_prompt(
     if skill_prompt:
         blocks.append(skill_prompt)
     return "\n\n".join(blocks) + "\n"
+
+
+def _compact_fallback_messages(messages: list[Any]) -> list[Any]:
+    return micro_compact_tool_messages(messages, keep_recent=3)
 
 
 class _RunnableChatModelAdapter(BaseChatModel):
@@ -359,7 +379,7 @@ async def web_search_tool(query: str) -> str:
         query: Search query.
     """
     result = await _run_builtin_tool("web_search", {"query": query})
-    return _tool_result_content(result)
+    return _tool_result_content(result, tool_use_id=f"web_search-{query}")
 
 
 @tool("ask_clarification", parse_docstring=True)
@@ -405,7 +425,7 @@ def _runtime_react_tools(available_skills: list[AgentSkill], runner: ToolRunner)
         result = runner("web_search", {"query": query})
         if hasattr(result, "__await__"):
             result = await result
-        return _tool_result_content(result)
+        return _tool_result_content(result, tool_use_id=f"web_search-{query}")
 
     @tool("load_skill", parse_docstring=True)
     def runtime_load_skill_tool(name: str) -> str:
@@ -526,10 +546,12 @@ def _tool_message_payload(tool_call_id: str, name: str, content: str) -> dict[st
     }
 
 
-def _tool_result_content(result: Any) -> str:
+def _tool_result_content(result: Any, *, tool_use_id: str = "tool-output") -> str:
     if isinstance(result, str):
-        return result
-    return json.dumps(result, ensure_ascii=False)
+        content = result
+    else:
+        content = json.dumps(result, ensure_ascii=False)
+    return persist_large_output(tool_use_id, content)
 
 
 def _partial_answer_fallback(messages: list[Any]) -> str:
