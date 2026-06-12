@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to eyjamini.com/ds
+    name: Deploy to hasmodream.com/ds
     runs-on: ubuntu-latest
     environment: Production
     timeout-minutes: 30
@@ -23,10 +23,10 @@ jobs:
 
       - name: Install SSH key
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: 103.112.1.107
+          DEPLOY_PORT: 22
+          DEPLOY_USER: root
+          DEPLOY_SSH_KEY: ${{ secrets.GOMAMI_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           require_secret() {
@@ -58,11 +58,14 @@ jobs:
 
       - name: Deploy
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_PUBLIC_ORIGIN: https://eyjamini.com
+          DEPLOY_HOST: 103.112.1.107
+          DEPLOY_USER: root
+          DEPLOY_PORT: 22
+          DEPLOY_PUBLIC_ORIGIN: https://hasmodream.com
           DEPLOY_BASE_PATH: /ds
           DEPLOY_WEB_PORT: 3002
           DEPLOY_API_PORT: 8000
+          DEPLOY_NGINX_SITE: /etc/nginx/sites-enabled/hasmodream
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
         run: scripts/deploy-production.sh

@@ -13,13 +13,13 @@ Deep Research 旨在把一次复杂研究拆解成可追踪、可复用、可展
 生产环境当前部署在：
 
 ```text
-https://eyjamini.com/ds
+https://hasmodream.com/ds
 ```
 
 健康检查：
 
 ```text
-https://eyjamini.com/ds/health
+https://hasmodream.com/ds/health
 ```
 
 ## 功能
@@ -207,7 +207,7 @@ api/database/schema.sql
 
 ```text
 http://localhost:3000/auth/callback
-https://eyjamini.com/ds/auth/callback
+https://hasmodream.com/ds/auth/callback
 ```
 
 详细说明见：
@@ -330,8 +330,8 @@ WEB_PORT=3002
 API_BUILD_CONTEXT=/api
 WEB_BUILD_CONTEXT=/ds
 API_ENV_FILE=/api/.env
-NEXT_PUBLIC_API_URL=https://eyjamini.com/ds
-FRONTEND_URL=https://eyjamini.com
+NEXT_PUBLIC_API_URL=https://hasmodream.com/ds
+FRONTEND_URL=https://hasmodream.com
 NEXT_PUBLIC_AUTH_CALLBACK_PATH=/ds/auth/callback
 NEXT_PUBLIC_BASE_PATH=/ds
 ```
@@ -358,10 +358,10 @@ scripts/deploy-production.sh
 GitHub Secrets 需要配置在 `Production` environment 下：
 
 ```text
-DEPLOY_HOST=159.195.30.218
-DEPLOY_USER=cxk
+DEPLOY_HOST=103.112.1.107
+DEPLOY_USER=root
 DEPLOY_PORT=22
-DEPLOY_SSH_KEY=<部署私钥>
+GOMAMI_SSH_PRIVATE_KEY=<gomami 部署私钥>
 ```
 
 部署脚本会：
@@ -371,7 +371,8 @@ DEPLOY_SSH_KEY=<部署私钥>
 3. 保留服务器上的 `/ds/.env` 和 `/api/.env`。
 4. 执行 `docker-compose build api web`。
 5. 执行 `docker-compose up -d api web`。
-6. 检查 `https://eyjamini.com/ds` 和 `https://eyjamini.com/ds/health`。
+6. 配置 Nginx `/ds` 反向代理。
+7. 检查 `https://hasmodream.com/ds` 和 `https://hasmodream.com/ds/health`。
 
 更多细节见：
 

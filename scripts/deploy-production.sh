@@ -9,18 +9,99 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
 DEPLOY_WEB_DIR="${DEPLOY_WEB_DIR:-/ds}"
 DEPLOY_API_DIR="${DEPLOY_API_DIR:-/api}"
-DEPLOY_PUBLIC_ORIGIN="${DEPLOY_PUBLIC_ORIGIN:-https://eyjamini.com}"
+DEPLOY_PUBLIC_ORIGIN="${DEPLOY_PUBLIC_ORIGIN:-https://hasmodream.com}"
 DEPLOY_BASE_PATH="${DEPLOY_BASE_PATH:-/ds}"
 DEPLOY_WEB_PORT="${DEPLOY_WEB_PORT:-3002}"
 DEPLOY_API_PORT="${DEPLOY_API_PORT:-8000}"
 DEPLOY_PROJECT_DIR="${DEPLOY_PROJECT_DIR:-$DEPLOY_WEB_DIR}"
+DEPLOY_NGINX_SITE="${DEPLOY_NGINX_SITE:-/etc/nginx/sites-enabled/hasmodream}"
+NEXT_PUBLIC_SUPABASE_URL="${NEXT_PUBLIC_SUPABASE_URL:-}"
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-}"
+DEPLOY_SSH_KEY_PATH="${DEPLOY_SSH_KEY_PATH:-}"
 
 SSH_TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
 SSH_OPTS=(-p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+if [ -n "$DEPLOY_SSH_KEY_PATH" ]; then
+  SSH_OPTS+=(-i "$DEPLOY_SSH_KEY_PATH")
+fi
 RSYNC_RSH="ssh -p $DEPLOY_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes"
+if [ -n "$DEPLOY_SSH_KEY_PATH" ]; then
+  RSYNC_RSH="$RSYNC_RSH -i $DEPLOY_SSH_KEY_PATH"
+fi
 
 remote_quote() {
   printf "%q" "$1"
+}
+
+configure_nginx() {
+  echo "Configuring Nginx route $DEPLOY_BASE_PATH..."
+  ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "\
+    DEPLOY_NGINX_SITE=$(remote_quote "$DEPLOY_NGINX_SITE") \
+    DEPLOY_BASE_PATH=$(remote_quote "$DEPLOY_BASE_PATH") \
+    DEPLOY_WEB_PORT=$(remote_quote "$DEPLOY_WEB_PORT") \
+    DEPLOY_API_PORT=$(remote_quote "$DEPLOY_API_PORT") \
+    sudo -E python3 - <<'PY'
+from pathlib import Path
+import os
+
+site = Path(os.environ['DEPLOY_NGINX_SITE'])
+base_path = os.environ['DEPLOY_BASE_PATH'].rstrip('/') or '/ds'
+web_port = os.environ['DEPLOY_WEB_PORT']
+api_port = os.environ['DEPLOY_API_PORT']
+
+text = site.read_text()
+start = '    # deep-research managed routes start\n'
+end = '    # deep-research managed routes end\n'
+block = f'''{start}    location = {base_path} {{
+        proxy_pass http://127.0.0.1:{web_port}{base_path};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }}
+
+    location = {base_path}/health {{
+        proxy_pass http://127.0.0.1:{api_port}/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }}
+
+    location ^~ {base_path}/api/ {{
+        proxy_pass http://127.0.0.1:{api_port}/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }}
+
+    location ^~ {base_path}/ {{
+        proxy_pass http://127.0.0.1:{web_port};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }}
+{end}'''
+
+if start in text and end in text:
+    before, rest = text.split(start, 1)
+    _, after = rest.split(end, 1)
+    text = before + block + after
+else:
+    marker = '    location / {\n'
+    if marker not in text:
+        raise SystemExit(f'Cannot find insertion marker in {site}')
+    text = text.replace(marker, block + '\n' + marker, 1)
+
+site.write_text(text)
+PY
+    sudo nginx -t && sudo systemctl reload nginx"
 }
 
 echo "Preparing remote directories..."
@@ -72,12 +153,21 @@ ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "\
       printf '%s=%s\n' \"\$key\" \"\$value\" >> .env; \
     fi; \
   }; \
+  ensure_env_if_set() { \
+    key=\"\$1\"; \
+    value=\"\$2\"; \
+    if [ -n \"\$value\" ]; then \
+      ensure_env \"\$key\" \"\$value\"; \
+    fi; \
+  }; \
   ensure_env API_PORT $(remote_quote "$DEPLOY_API_PORT"); \
   ensure_env WEB_PORT $(remote_quote "$DEPLOY_WEB_PORT"); \
   ensure_env API_BUILD_CONTEXT $(remote_quote "$DEPLOY_API_DIR"); \
   ensure_env WEB_BUILD_CONTEXT $(remote_quote "$DEPLOY_WEB_DIR"); \
   ensure_env API_ENV_FILE $(remote_quote "$DEPLOY_API_DIR/.env"); \
   ensure_env NEXT_PUBLIC_API_URL $(remote_quote "$DEPLOY_PUBLIC_ORIGIN$DEPLOY_BASE_PATH"); \
+  ensure_env_if_set NEXT_PUBLIC_SUPABASE_URL $(remote_quote "$NEXT_PUBLIC_SUPABASE_URL"); \
+  ensure_env_if_set NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY $(remote_quote "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"); \
   ensure_env FRONTEND_URL $(remote_quote "$DEPLOY_PUBLIC_ORIGIN"); \
   ensure_env NEXT_PUBLIC_AUTH_CALLBACK_PATH $(remote_quote "$DEPLOY_BASE_PATH/auth/callback"); \
   ensure_env NEXT_PUBLIC_BASE_PATH $(remote_quote "$DEPLOY_BASE_PATH"); \
@@ -85,7 +175,23 @@ ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "\
 
 echo "Building and starting containers..."
 ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
-  "cd $(remote_quote "$DEPLOY_PROJECT_DIR") && sudo docker-compose config >/tmp/deep-research-compose.config && sudo docker-compose build api web && sudo docker-compose up -d api && sudo docker-compose rm -sf web && sudo docker-compose up -d web && sudo docker-compose ps"
+  "cd $(remote_quote "$DEPLOY_PROJECT_DIR") && \
+    if command -v docker-compose >/dev/null 2>&1; then \
+      compose='docker-compose'; \
+    elif sudo docker compose version >/dev/null 2>&1; then \
+      compose='docker compose'; \
+    else \
+      echo 'Missing Docker Compose. Install Docker Engine with the Compose plugin before deploying.'; \
+      exit 1; \
+    fi; \
+    sudo \$compose config >/tmp/deep-research-compose.config && \
+    sudo \$compose build api web && \
+    sudo \$compose up -d api && \
+    sudo \$compose rm -sf web && \
+    sudo \$compose up -d web && \
+    sudo \$compose ps"
+
+configure_nginx
 
 echo "Verifying deployment..."
 ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
